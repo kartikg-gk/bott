@@ -182,6 +182,22 @@ describe("gmail", () => {
     );
   });
 
+  it("encodes only the names in a recipient list, keeping each address readable", () => {
+    const head = (to: string) =>
+      Buffer.from(rawMessage({ to, subject: "s", body: "" }), "base64url")
+        .toString()
+        .split("\r\n")[0];
+    const word = (text: string) => `=?utf-8?B?${Buffer.from(text).toString("base64")}?=`;
+    expect(head("Jürgen <j@x.de>")).toBe(`To: ${word("Jürgen")} <j@x.de>`);
+    expect(head('"Müller, Anna" <a@x.de>, b@y.de')).toBe(
+      `To: ${word("Müller, Anna")} <a@x.de>, b@y.de`,
+    );
+    expect(head("Plain Name <p@x.de>")).toBe("To: Plain Name <p@x.de>");
+    expect(head('"Smith, J" <s@x.de>, Jürgen <j@x.de>')).toBe(
+      `To: "Smith, J" <s@x.de>, ${word("Jürgen")} <j@x.de>`,
+    );
+  });
+
   it("uses the account's connection when signed in", async () => {
     const fetcher = server();
     const apps = new AppRunner({

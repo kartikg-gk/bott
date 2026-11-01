@@ -123,13 +123,43 @@ function headerWord(value: string): string {
   return `=?utf-8?B?${Buffer.from(value).toString("base64")}?=`;
 }
 
+/**
+ * The recipient header with only the display names encoded. An encoded word may not hold an
+ * address, so `Name <a@b>` keeps its angle part as written; commas inside quotes stay in a name.
+ */
+function recipients(value: string): string {
+  if (/[\r\n]/.test(value) || /^[\x20-\x7e]*$/.test(value)) return headerWord(value);
+  const parts: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (const char of value) {
+    if (char === '"') quoted = !quoted;
+    if (char === "," && !quoted) {
+      parts.push(current);
+      current = "";
+    } else current += char;
+  }
+  parts.push(current);
+  return parts
+    .map((part) => {
+      const named = /^\s*(.*?)\s*<([^<>]*)>\s*$/.exec(part);
+      if (!named) return headerWord(part.trim());
+      const written = named[1] ?? "";
+      if (!written) return `<${named[2]}>`;
+      // A plain name stays as written, quotes and all; only one with other letters is encoded.
+      const name = /^[\x20-\x7e]*$/.test(written) ? written : written.replace(/^"(.*)"$/, "$1");
+      return `${headerWord(name)} <${named[2]}>`;
+    })
+    .join(", ");
+}
+
 /** A plain-text message, encoded the way the Gmail API takes it. */
 export function rawMessage(args: { to: string; subject: string; body: string }): string {
   const body = Buffer.from(args.body)
     .toString("base64")
     .replace(/.{76}(?=.)/g, "$&\r\n");
   const lines = [
-    `To: ${headerWord(args.to)}`,
+    `To: ${recipients(args.to)}`,
     `Subject: ${headerWord(args.subject)}`,
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="utf-8"',
