@@ -5,14 +5,36 @@ const UNITS: Record<string, number> = { m: 60, h: 3600, d: 86400 };
 const EVENT_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const ISO_TIME_HINT = "Use an ISO time, for example at 2026-11-02T08:00+05:30";
 
-const ISO =
-  /^(\d{4})-?(\d{2})-?(\d{2})(?:.(\d{2})(?::?(\d{2})(?::?(\d{2})(?:[.,](\d+))?)?)?(z|[+-]\d{2}(?::?\d{2}(?::?\d{2})?)?)?)?$/;
+const CLOCK = String.raw`(?:.(\d{2})(?::?(\d{2})(?::?(\d{2})(?:[.,](\d+))?)?)?(z|[+-]\d{2}(?::?\d{2}(?::?\d{2})?)?)?)?$`;
+const CALENDAR = new RegExp(String.raw`^(\d{4})-?(\d{2})-?(\d{2})${CLOCK}`);
+const WEEK = new RegExp(String.raw`^(\d{4})-?w(\d{2})(?:-?([1-7]))?${CLOCK}`);
+
+/** The calendar day of an ISO week date, or null when that year has no such week. */
+function weekDay(year: number, week: number, day: number): [number, number, number] | null {
+  const jan4 = new Date(Date.UTC(2000, 0, 4));
+  jan4.setUTCFullYear(year);
+  const monday =
+    jan4.getTime() + (-((jan4.getUTCDay() + 6) % 7) + (week - 1) * 7 + (day - 1)) * 86400000;
+  const thursday = new Date(monday + (4 - day) * 86400000);
+  if (week < 1 || thursday.getUTCFullYear() !== year) return null;
+  const date = new Date(monday);
+  return [date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()];
+}
 
 /** Reads an ISO 8601 date or date-time; a time without an offset is local time. Seconds, or null. */
 function isoSeconds(text: string): number | null {
-  const m = ISO.exec(text.toLowerCase());
+  const lower = text.toLowerCase();
+  const week = WEEK.exec(lower);
+  const m = week ?? CALENDAR.exec(lower);
   if (!m) return null;
-  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  let year = Number(m[1]);
+  let month = Number(m[2]);
+  let day = Number(m[3]);
+  if (week) {
+    const found = weekDay(year, month, Number(m[3] ?? 1));
+    if (!found) return null;
+    [year, month, day] = found;
+  }
   const hour = Number(m[4] ?? 0);
   const minute = Number(m[5] ?? 0);
   const second = Number(m[6] ?? 0);
@@ -75,11 +97,13 @@ export function nextRun(spec: string, now: number): number | null {
   const value = colon < 0 ? "" : spec.slice(colon + 1);
   if (kind === "every") {
     const seconds = Number(value);
-    if (!Number.isInteger(seconds)) throw new Error(`Bad schedule: ${spec}`);
+    if (!/^\d+$/.test(value) || seconds < MIN_INTERVAL) throw new Error(`Bad schedule: ${spec}`);
     return now + seconds;
   }
   if (kind === "daily") {
-    const [hour, minute] = value.split(":").map(Number) as [number, number];
+    const parts = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+    if (!parts) throw new Error(`Bad schedule: ${spec}`);
+    const [hour, minute] = [Number(parts[1]), Number(parts[2])] as [number, number];
     const current = new Date(now * 1000);
     for (let ahead = 0; ahead < 3; ahead++) {
       const target = new Date(

@@ -35,6 +35,11 @@ describe("parseWhen", () => {
     ["at 2027-02-01", "once", utc("2027-01-31T18:30:00Z")],
     ["at 2027-02-01T08:00:00.500-04:00", "once", utc("2027-02-01T12:00:00.500Z")],
     ["at 20270201T0800Z", "once", utc("2027-02-01T08:00:00Z")],
+    ["at 2027-W05-1", "once", utc("2027-01-31T18:30:00Z")],
+    ["at 2027W051", "once", utc("2027-01-31T18:30:00Z")],
+    ["at 2027-W05", "once", utc("2027-01-31T18:30:00Z")],
+    ["at 2027-W05-3T08:00Z", "once", utc("2027-02-03T08:00:00Z")],
+    ["at 2032-W53-7T00:00Z", "once", utc("2033-01-02T00:00:00Z")],
     ["on build.done", "event:build.done", null],
     ["On  deploy-ok ", "event:deploy-ok", null],
   ];
@@ -69,6 +74,9 @@ describe("parseWhen", () => {
     );
     expect(() => parseWhen("at 2027-13-01T00:00Z", NOW)).toThrow("Use an ISO time");
     expect(() => parseWhen("at 2027-02-30", NOW)).toThrow("Use an ISO time");
+    for (const bad of ["2027-W00-1", "2027-W53-1", "2027-W05-8", "2027-W54"]) {
+      expect(() => parseWhen(`at ${bad}`, NOW)).toThrow("Use an ISO time");
+    }
     expect(() => parseWhen("at 2027-02-01T25:00Z", NOW)).toThrow("Use an ISO time");
   });
 });
@@ -82,6 +90,30 @@ describe("nextRun", () => {
     expect(nextRun("once", NOW)).toBeNull();
     expect(nextRun("event:build.done", NOW)).toBeNull();
     expect(nextRun("mystery", NOW)).toBeNull();
+  });
+
+  it("refuses corrupt specs instead of returning a time at or before now", () => {
+    for (const spec of [
+      "every",
+      "every:",
+      "every:0",
+      "every:-5",
+      "every:59",
+      "every:x",
+      "every:1.5",
+    ]) {
+      expect(() => nextRun(spec, NOW), spec).toThrow("Bad schedule");
+    }
+    for (const spec of [
+      "daily",
+      "daily:xx",
+      "daily:25:99",
+      "daily:8:05",
+      "daily:08:60",
+      "daily:08",
+    ]) {
+      expect(() => nextRun(spec, NOW), spec).toThrow("Bad schedule");
+    }
   });
 
   it("finds the next daily time strictly after now", () => {
