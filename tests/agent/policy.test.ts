@@ -42,6 +42,14 @@ describe("approval policy", () => {
     const r = await hook(call("Bash", { command: "rm -rf build" }));
     expect(r).toEqual({ allow: false, reason: "File deletion and disk changes are refused." });
   });
+
+  it("engine judges commands by the shell of the computer they run on", async () => {
+    const posix = makeBeforeToolCall("engine", async () => false, undefined, false);
+    expect(await posix(call("Bash", { command: "del notes" }))).toEqual({ allow: true });
+    expect((await posix(call("Bash", { command: "r\\m -rf x" }))).allow).toBe(false);
+    const windows = makeBeforeToolCall("engine", async () => false, undefined, true);
+    expect((await windows(call("Bash", { command: "del notes" }))).allow).toBe(false);
+  });
 });
 
 describe("blocked shell commands", () => {

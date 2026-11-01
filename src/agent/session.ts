@@ -88,6 +88,8 @@ export interface SessionOptions {
   /** `signal` aborts when the run stops, so work the call started can stop with it. */
   answerHostTool?: (call: HostToolCall, signal: AbortSignal) => Promise<ToolOutput>;
   policy?: Policy;
+  /** Whether shell commands run under Windows; this machine's platform when left out. */
+  windowsShell?: boolean;
   store?: SessionStore;
   contextWindow?: number;
   /** Seconds since the epoch, as a float; approval deadlines are measured by it. */
@@ -353,7 +355,12 @@ export class AgentSession {
         signal,
         steering: () => this.steering.splice(0),
         followUps: () => this.followUps.splice(0),
-        beforeToolCall: makeBeforeToolCall(this.opts.policy ?? "engine", ask, readOnly),
+        beforeToolCall: makeBeforeToolCall(
+          this.opts.policy ?? "engine",
+          ask,
+          readOnly,
+          this.opts.windowsShell,
+        ),
         beforeModelRequest: (messages) => this.compactIfFull(messages, text),
         cacheKey: this.opts.id,
       })) {

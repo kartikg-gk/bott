@@ -94,11 +94,15 @@ export function scrubbedEnv(env: Record<string, string | undefined>): Record<str
   return out;
 }
 
-/** Decides each tool call before it runs. `ask` resolves true when the person approves. */
+/**
+ * Decides each tool call before it runs. `ask` resolves true when the person approves. `windows`
+ * says whether shell commands run under Windows, which changes how they are read.
+ */
 export function makeBeforeToolCall(
   policy: Policy,
   ask: (call: ToolCall) => Promise<boolean>,
   readOnlyTools: ReadonlySet<string> = new Set(["Read"]),
+  windows: boolean = process.platform === "win32",
 ): BeforeToolCall {
   return async (call) => {
     if (readOnlyTools.has(call.name)) return { allow: true };
@@ -114,7 +118,9 @@ export function makeBeforeToolCall(
       case "engine": {
         const command = (call.input as { command?: unknown } | null)?.command;
         const reason =
-          call.name === "Bash" && typeof command === "string" ? blockedCommand(command) : null;
+          call.name === "Bash" && typeof command === "string"
+            ? blockedCommand(command, windows)
+            : null;
         return reason ? { allow: false, reason } : { allow: true };
       }
     }

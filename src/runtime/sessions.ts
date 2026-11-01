@@ -688,6 +688,8 @@ export class SessionManager {
       skills: built.skills,
       ...team,
       policy: opts.policy ?? this.config.policy,
+      // Containers and sandboxes run a POSIX shell whatever this machine is.
+      windowsShell: process.platform === "win32" && !this.sandboxed,
       store: this.storeFor(sessionFile),
       clock: () => this.now(),
       ...(this.config.approvalSeconds === undefined
