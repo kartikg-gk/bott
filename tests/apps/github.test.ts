@@ -148,7 +148,7 @@ describe("github", () => {
 
   it("refuses repository names that could leave the repository path", async () => {
     const { fetcher, apps } = runner({});
-    for (const repo of ["o", "o/r/x", "../r", "o/..", "o/r?x"]) {
+    for (const repo of ["o", "o/r/x", "../r", "o/..", "o/r?x", "./x", "x/.", "./."]) {
       await expect(apps.run("github_get_repository", { repo })).rejects.toThrow(
         "Give the repository as owner/name",
       );

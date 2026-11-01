@@ -123,7 +123,14 @@ const READS: Record<string, { route: string; fields: string[]; paged: boolean }>
 type Item = Record<string, unknown>;
 
 export function repository(name: unknown): string {
-  if (typeof name !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(name) || name.includes("..")) {
+  // A part made only of dots would be dropped or climb out of /repos/ in the request path.
+  const parts = typeof name === "string" ? name.split("/") : [];
+  if (
+    typeof name !== "string" ||
+    !/^[\w.-]+\/[\w.-]+$/.test(name) ||
+    name.includes("..") ||
+    parts.some((part) => part === ".")
+  ) {
     throw new AppError("Give the repository as owner/name");
   }
   return name;
