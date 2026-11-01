@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ModelProvider,
   ProviderRequest,
@@ -11,6 +11,7 @@ import { emptyUsage, textOf } from "../../src/agent/transcript.ts";
 import { type Bot, botRoot } from "../../src/bots/bots.ts";
 import { rememberSession, savedSession } from "../../src/bots/profiles.ts";
 import type { Database } from "../../src/db/database.ts";
+import { Lease } from "../../src/db/leases.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
 import { Store } from "../../src/store/store.ts";
 import { type Backend, backends, database } from "../support/fakeD1.ts";
@@ -227,6 +228,31 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await expect(sessions.delegate(route, await store.chief(), "loop")).rejects.toThrow(
       /cannot delegate back/,
     );
+  });
+
+  it("a bot hold that cannot be released keeps the run's outcome", async () => {
+    const { store, manager } = await setup();
+    const writer = await store.createBot({ name: "Writer", role: "Drafts text" });
+    const sessions = manager(scripted("hello", "draft ready", "again").factory);
+    const route = await store.conversation(1, 1);
+    const release = vi
+      .spyOn(Lease.prototype, "release")
+      .mockRejectedValue(new Error("network went away"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await sessions.prompt(route, "hi")).toEqual({ text: "hello", outcome: "completed" });
+      expect(await sessions.delegate(route, writer, "draft a note")).toBe("draft ready");
+      expect(release).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(sessions.isBusy(writer.id)).toBe(false);
+      expect(sessions.isBusy((await store.chief()).id)).toBe(false);
+    } finally {
+      release.mockRestore();
+      warn.mockRestore();
+    }
+    // The hold left in the database runs out by itself.
+    now += 61;
+    expect(await sessions.prompt(route, "more")).toEqual({ text: "again", outcome: "completed" });
   });
 
   it("idle sessions are closed after idleSeconds", async () => {

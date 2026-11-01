@@ -466,6 +466,9 @@ export class SessionManager {
       clearInterval(renewal);
       try {
         await lease.release();
+      } catch (error) {
+        // The run has ended either way; the hold runs out by itself once it is not renewed.
+        console.warn(`Could not release the hold on bot ${botId}:`, error);
       } finally {
         this.activeBots.delete(botId);
         unlock();
