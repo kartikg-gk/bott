@@ -7,6 +7,7 @@ import type { Policy } from "../agent/policy.ts";
 import type { ModelProvider } from "../agent/providers/types.ts";
 import {
   AgentSession,
+  type HostToolCall,
   type Outcome,
   type SessionEvent,
   type SessionState,
@@ -30,6 +31,7 @@ import {
 import { Lease } from "../db/leases.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
+import { type Agents, answerTeamCall, teamTools } from "./team.ts";
 
 export interface RuntimeConfig {
   stateDir: string;
@@ -154,6 +156,8 @@ export class SessionManager {
   /** Hosted transcripts, kept for as long as this manager lives. */
   private readonly memory = memorySessionStore();
   private readonly timer: NodeJS.Timeout;
+  /** Background work the chief's cancel_task can stop; set by whatever runs it. */
+  agents: Agents | undefined;
 
   constructor(
     private readonly config: RuntimeConfig,
@@ -298,6 +302,7 @@ export class SessionManager {
       live = await this.create(target, await this.build(target), id, sessionFile, {
         model: this.config.model,
         policy: opts.policy,
+        route,
       });
       live.busy = true;
       this.delegations.add(live);
@@ -457,6 +462,7 @@ export class SessionManager {
       }
       const live = await this.create(bot, built, id, route.sessionFile, {
         model: route.model ?? this.config.model,
+        route,
       });
       this.live.set(sessionKey(id), live);
       return { live, route, bot };
@@ -504,9 +510,21 @@ export class SessionManager {
     built: Built,
     id: string,
     sessionFile: string | null,
-    opts: { model: string; policy?: Policy | undefined },
+    opts: { model: string; policy?: Policy | undefined; route: Route },
   ): Promise<Live> {
     const provider = this.providers(bot, built.profile);
+    const { route } = opts;
+    // Only the chief manages the team; the person who owns the route is who it acts for.
+    const team = bot.chief
+      ? {
+          hostTools: teamTools(),
+          answerHostTool: (call: HostToolCall) =>
+            answerTeamCall(
+              { store: this.store, sessions: this, route, actor: route.user, agents: this.agents },
+              call,
+            ),
+        }
+      : {};
     const session = await AgentSession.open({
       id,
       providers: { [provider.id]: provider },
@@ -515,6 +533,7 @@ export class SessionManager {
       system: built.system,
       tools: built.tools,
       skills: built.skills,
+      ...team,
       policy: opts.policy ?? this.config.policy,
       store: this.storeFor(sessionFile),
       clock: () => this.now(),
