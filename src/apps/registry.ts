@@ -1,10 +1,9 @@
 import type { App, AppContext, AppServices, Env } from "./app.ts";
+import { github } from "./github.ts";
 import { AppError, type Fetch, HttpError } from "./http.ts";
 
 /** Every app the server can run, by name, in the order people see them. */
-export const APPS: Record<string, App> = Object.fromEntries(
-  ([] as App[]).map((app) => [app.name, app]),
-);
+export const APPS: Record<string, App> = Object.fromEntries([github].map((app) => [app.name, app]));
 
 /** The app a tool belongs to. */
 export function toolOwner(tool: string, apps: Record<string, App> = APPS): string | undefined {
