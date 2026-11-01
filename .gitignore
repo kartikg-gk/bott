@@ -6,4 +6,5 @@ dist/
 *.md
 coverage/
 
+!.env.example
 !tests/fixtures/*.sqlite3
