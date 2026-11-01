@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import * as bots from "../bots/bots.js";
 import type { Database } from "../db/database.js";
 import { ensureSchema } from "../db/schema.js";
 import type { StoreContext } from "./context.js";
@@ -13,6 +14,7 @@ const CHIEF_ROLE = "The main bot for this person.";
 const APPROVAL_DAYS = 30;
 const DAY = 86400;
 
+export type { Bot, BotChanges } from "../bots/bots.js";
 export type { Approval, Decision, InboxItem, InboxStatus, TaskNotice } from "./inbox.js";
 export { REPORT_IDS, WEB_IDS } from "./inbox.js";
 export type { Job, JobChanges, NewJob, NextRun } from "./jobs.js";
@@ -72,6 +74,42 @@ export class Store {
     const row = rows[0];
     if (!row) throw new Error("The instance has no chief bot");
     return { id: String(row.id), name: String(row.name) };
+  }
+
+  bots(opts?: { temporary?: boolean }) {
+    return bots.bots(this.ctx, opts);
+  }
+
+  bot(id: string) {
+    return bots.bot(this.ctx, id);
+  }
+
+  findBot(nameOrId: string) {
+    return bots.findBot(this.ctx, nameOrId);
+  }
+
+  createBot(input: { name: string; role: string; instructions?: string; temporary?: boolean }) {
+    return bots.createBot(this.ctx, input);
+  }
+
+  updateBot(id: string, fields: bots.BotChanges) {
+    return bots.updateBot(this.ctx, id, fields);
+  }
+
+  keepBot(id: string) {
+    return bots.keepBot(this.ctx, id);
+  }
+
+  removeBot(id: string) {
+    return bots.removeBot(this.ctx, id);
+  }
+
+  pluginsFor(botId: string) {
+    return bots.pluginsFor(this.ctx, botId);
+  }
+
+  setPlugin(botId: string, plugin: string, on: boolean) {
+    return bots.setPlugin(this.ctx, botId, plugin, on);
   }
 
   conversation(chat: number, user: number, thread = 0) {
