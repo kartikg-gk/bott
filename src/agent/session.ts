@@ -16,6 +16,8 @@ export interface HostTool {
   description: string;
   input: z.ZodTypeAny;
   readOnly: boolean;
+  /** Always asks the person first, whatever the policy, unless the policy refuses everything. */
+  review?: boolean;
 }
 
 export interface HostToolCall {
@@ -124,6 +126,9 @@ export class AgentSession {
   private readonly queue: SessionEvent[] = [];
   private wake: (() => void) | undefined;
   private saving: Promise<void> = Promise.resolve();
+  /** Tools that run without approval; grows when host tools are added mid-conversation. */
+  private readonly readOnly = new Set<string>();
+  private readonly reviewed = new Set<string>();
 
   private constructor(
     private readonly opts: SessionOptions,
@@ -136,8 +141,22 @@ export class AgentSession {
     this.tools = [
       ...(opts.tools ?? []),
       ...(opts.skills?.length ? [loadSkillTool(opts.skills)] : []),
-      ...(opts.hostTools ?? []).map((t) => this.hostToolSpec(t)),
     ];
+    for (const t of this.tools) if (t.readOnly) this.readOnly.add(t.name);
+    this.addHostTools(opts.hostTools ?? []);
+  }
+
+  /**
+   * Offers more server-answered tools from the next model request on, such as an app's tools
+   * once the bot loads it. Names already offered are skipped.
+   */
+  addHostTools(tools: HostTool[]): void {
+    for (const t of tools) {
+      if (this.tools.some((existing) => existing.name === t.name)) continue;
+      this.tools.push(this.hostToolSpec(t));
+      if (t.readOnly) this.readOnly.add(t.name);
+      if (t.review) this.reviewed.add(t.name);
+    }
   }
 
   static async open(opts: SessionOptions): Promise<AgentSession> {
@@ -343,7 +362,8 @@ export class AgentSession {
     let error: string | undefined;
     try {
       const ask = (call: ToolCall) => this.askApproval(call, signal);
-      const readOnly = new Set(this.tools.filter((t) => t.readOnly).map((t) => t.name));
+      const policy = this.opts.policy ?? "engine";
+      const decide = makeBeforeToolCall(policy, ask, this.readOnly, this.opts.windowsShell);
       let last: ModelEntry | undefined;
       for await (const event of runAgentLoop({
         provider: this.provider(),
@@ -355,12 +375,11 @@ export class AgentSession {
         signal,
         steering: () => this.steering.splice(0),
         followUps: () => this.followUps.splice(0),
-        beforeToolCall: makeBeforeToolCall(
-          this.opts.policy ?? "engine",
-          ask,
-          readOnly,
-          this.opts.windowsShell,
-        ),
+        // A reviewed tool asks every time; it is refused outright only when the policy denies.
+        beforeToolCall: (call) =>
+          this.reviewed.has(call.name) && policy !== "deny"
+            ? makeBeforeToolCall("ask", ask, this.readOnly, this.opts.windowsShell)(call)
+            : decide(call),
         beforeModelRequest: (messages) => this.compactIfFull(messages, text),
         cacheKey: this.opts.id,
       })) {

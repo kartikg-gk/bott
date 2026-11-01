@@ -19,6 +19,7 @@ import { shellTool } from "../agent/tools/shell.ts";
 import type { Workspace } from "../agent/tools/workspace.ts";
 import type { ToolSpec } from "../agent/tools.ts";
 import { textOf } from "../agent/transcript.ts";
+import { type BotApps, LOAD_PLUGIN } from "../apps/access.ts";
 import { type Bot, botRoot, MEMORY_FILES, systemAddition, workspaceDir } from "../bots/bots.ts";
 import {
   type Profile,
@@ -134,6 +135,8 @@ interface Built {
   tools: ToolSpec[];
   skills: Skill[];
   profile: Profile;
+  /** The apps the bot may load: granted to it and ready to use. */
+  apps: string[];
   /** Changes whenever anything the session was built from changes. */
   signature: string;
 }
@@ -183,6 +186,8 @@ export class SessionManager {
   agents: Agents | undefined;
   /** Where approvals asked by delegations and background agents go; set by whatever shows them. */
   approvals: ApprovalRelay | undefined;
+  /** The apps bots may use; set by whatever composes the server. Without it bots get no apps. */
+  apps: BotApps | undefined;
 
   constructor(
     private readonly config: RuntimeConfig,
@@ -632,7 +637,9 @@ export class SessionManager {
       recursive: true,
     });
     const settings = await profile(this.store, bot.id);
-    const plugins = await this.store.pluginsFor(bot.id);
+    const plugins = this.apps
+      ? await this.apps.enabled(bot.id)
+      : await this.store.pluginsFor(bot.id);
     const skills = loadSkills([join(root, "skills")]);
     const ws = this.workspaceFor(bot);
     const sections = [systemAddition(bot, notesDir, ws.memoryPath)];
@@ -647,7 +654,7 @@ export class SessionManager {
       skills.map((s) => [s.name, s.body]),
       tools.map((t) => t.name),
     ]);
-    return { system, tools, skills, profile: settings, signature };
+    return { system, tools, skills, profile: settings, apps: this.apps ? plugins : [], signature };
   }
 
   private async create(
@@ -661,10 +668,22 @@ export class SessionManager {
     const { route } = opts;
     // Every bot may schedule its own jobs; only the chief manages the team. The person who owns
     // the route is who it acts for.
+    // App tools are run here on the server; a bot starts with only the loader and app names.
+    const apps = built.apps.length > 0 ? this.apps : undefined;
+    let session: AgentSession | undefined;
     const team = {
-      hostTools: bot.chief ? [...teamTools(), ...jobTools()] : jobTools(),
-      answerHostTool: (call: HostToolCall, signal: AbortSignal) =>
-        answerTeamCall(
+      hostTools: [
+        ...(bot.chief ? [...teamTools(), ...jobTools()] : jobTools()),
+        ...(apps ? [apps.loader(built.apps)] : []),
+      ],
+      answerHostTool: async (call: HostToolCall, signal: AbortSignal) => {
+        if (apps && call.name === LOAD_PLUGIN) {
+          const loaded = await apps.load(bot.id, call.input);
+          session?.addHostTools(loaded.tools);
+          return loaded.output;
+        }
+        if (apps?.owns(call.name)) return apps.call(bot, call.name, call.input);
+        return answerTeamCall(
           {
             store: this.store,
             sessions: this,
@@ -676,9 +695,10 @@ export class SessionManager {
             signal,
           },
           call,
-        ),
+        );
+      },
     };
-    const session = await AgentSession.open({
+    session = await AgentSession.open({
       id,
       providers: { [provider.id]: provider },
       provider: provider.id,
