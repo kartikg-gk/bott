@@ -15,6 +15,17 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** Work the chief hands to another bot. A bot runs at most one such task at a time. */
+const delegations: Upgrade = {
+  reaches: 6,
+  statements: () => [
+    "CREATE TABLE delegations(id INTEGER PRIMARY KEY AUTOINCREMENT,instance TEXT NOT NULL," +
+      "route INTEGER NOT NULL,bot TEXT NOT NULL,task TEXT NOT NULL,status TEXT NOT NULL," +
+      "answer TEXT,created REAL NOT NULL,finished REAL)",
+    "CREATE UNIQUE INDEX one_task_per_bot ON delegations(instance,bot) WHERE status='running'",
+  ],
+};
+
 /** Scheduled jobs, and the lookup that finds the ones due. */
 const scheduledJobs: Upgrade = {
   reaches: 7,
@@ -205,6 +216,7 @@ const runContext: Upgrade = {
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
 export const UPGRADES: readonly Upgrade[] = [
+  delegations,
   scheduledJobs,
   appGrants,
   backgroundTasks,
