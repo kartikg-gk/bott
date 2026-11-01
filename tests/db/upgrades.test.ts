@@ -6,11 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ensureSchema, SCHEMA_VERSION } from "../../src/db/schema.ts";
 import { SqliteDatabase } from "../../src/db/sqlite.ts";
 import { UPGRADES } from "../../src/db/upgrades.ts";
+import { Store } from "../../src/store/store.ts";
 import { FakeD1 } from "../support/fakeD1.ts";
 import { allRows, SHARED_FIXTURE, stepBack } from "./olderFile.ts";
 
 /** The versions a file can be found at and still be brought to 21 here. */
-const OLDER = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+const OLDER = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 
 type Row = Record<string, unknown>;
 
@@ -183,6 +184,26 @@ describe("upgrading a SQLite file from an older schema", () => {
       expect(names).not.toContainEqual({ name: "scheduler_leases" });
     } finally {
       after.close();
+    }
+  });
+
+  it("hands the chats of a file from before bots to the chief, sessions and all", async () => {
+    const path = olderFile(4);
+    const old = new BetterSqlite3(path, { readonly: true });
+    const route = old.prepare("SELECT * FROM routes ORDER BY id LIMIT 1").get() as Row;
+    old.close();
+    const db = new SqliteDatabase(path);
+    try {
+      const store = await Store.open(db, String(route.instance));
+      const chief = await store.chief();
+      const opened = await store.conversation(
+        Number(route.chat),
+        Number(route.user),
+        Number(route.thread),
+      );
+      expect(opened).toMatchObject({ id: route.id, bot: chief.id, session: route.session });
+    } finally {
+      await db.close();
     }
   });
 

@@ -15,6 +15,24 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/**
+ * Named bots, one of them the chief, and each route's chosen bot with its own session per bot.
+ * Routes from before this step have no bot yet; the store gives them the chief when opened.
+ */
+const namedBots: Upgrade = {
+  reaches: 5,
+  statements: () => [
+    "CREATE TABLE bots(id TEXT PRIMARY KEY,instance TEXT NOT NULL,name TEXT NOT NULL," +
+      "name_key TEXT NOT NULL,role TEXT NOT NULL,instructions TEXT NOT NULL DEFAULT ''," +
+      "chief INTEGER NOT NULL DEFAULT 0,created REAL NOT NULL,UNIQUE(instance,name_key))",
+    "CREATE UNIQUE INDEX one_chief ON bots(instance) WHERE chief=1",
+    "ALTER TABLE routes ADD COLUMN bot TEXT",
+    "CREATE TABLE route_bots(route INTEGER NOT NULL,bot TEXT NOT NULL,session TEXT," +
+      "session_file TEXT,title TEXT,provider TEXT,model TEXT,thinking TEXT," +
+      "PRIMARY KEY(route,bot))",
+  ],
+};
+
 /** Work the chief hands to another bot. A bot runs at most one such task at a time. */
 const delegations: Upgrade = {
   reaches: 6,
@@ -216,6 +234,7 @@ const runContext: Upgrade = {
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
 export const UPGRADES: readonly Upgrade[] = [
+  namedBots,
   delegations,
   scheduledJobs,
   appGrants,
