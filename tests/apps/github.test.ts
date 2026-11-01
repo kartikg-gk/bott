@@ -95,7 +95,7 @@ describe("github", () => {
     expect(page.patch).toHaveLength(500);
     await expect(
       apps.run("github_list_pull_request_files", { repo: "o/r", number: 2, filename: "z" }),
-    ).rejects.toThrow("That file is not on this page of the pull request");
+    ).rejects.toThrow("That filename is not among this page of changed files");
   });
 
   it("reads files raw and writes only what it is asked", async () => {
@@ -140,7 +140,7 @@ describe("github", () => {
     const { fetcher, apps } = runner({});
     for (const path of ["../../user", "docs/../../../user", "./a"]) {
       await expect(apps.run("github_read_file", { repo: "o/r", path })).rejects.toThrow(
-        "Use a file path inside the repository",
+        "Give a path to a file within the repository",
       );
     }
     expect(fetcher.seen).toHaveLength(0);
@@ -150,7 +150,7 @@ describe("github", () => {
     const { fetcher, apps } = runner({});
     for (const repo of ["o", "o/r/x", "../r", "o/..", "o/r?x"]) {
       await expect(apps.run("github_get_repository", { repo })).rejects.toThrow(
-        "Name the repository as owner/name",
+        "Give the repository as owner/name",
       );
     }
     expect(fetcher.seen).toHaveLength(0);

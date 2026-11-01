@@ -9,36 +9,36 @@ const API = "https://api.github.com";
 const tools = [
   tool(
     "github_list_repositories",
-    "Show repositories the connected GitHub account can reach, from page 1.",
+    "Repositories the linked GitHub account can open, one page at a time (first page is 1).",
     { page: count },
     { optional: "all" },
   ),
-  tool("github_get_repository", "Read repository metadata.", { repo: text }),
+  tool("github_get_repository", "Details about one repository.", { repo: text }),
   tool(
     "github_list_issue_comments",
-    "Read a page of comments on an issue or pull request.",
+    "One page of the discussion on an issue or pull request.",
     { repo: text, number: count, page: count },
     { optional: ["page"] },
   ),
   tool(
     "github_list_pull_requests",
-    "Show a page of pull requests; open ones unless told otherwise.",
+    "One page of a repository's pull requests; only open ones unless a state is given.",
     { repo: text, page: count, state: z.enum(["open", "closed", "all"]) },
     { optional: ["page", "state"] },
   ),
-  tool("github_get_pull_request", "Read a pull request with its branches and whether it can merge.", {
+  tool("github_get_pull_request", "A pull request with its branches and whether it can merge.", {
     repo: text,
     number: count,
   }),
   tool(
     "github_list_pull_request_files",
-    "Show which paths changed with short patches; give a filename to page through its patch.",
+    "Files a pull request touches, with a short diff for each. Give a filename to page through that file's diff.",
     { repo: text, number: count, page: count, filename: text, offset },
     { optional: ["page", "filename", "offset"] },
   ),
   tool(
     "github_create_pull_request",
-    "Open a pull request from a branch that exists, when asked to.",
+    "Opens a pull request from a branch that already exists. Only do this when asked.",
     {
       repo: text,
       title: text,
@@ -49,25 +49,25 @@ const tools = [
     },
     { optional: ["body", "draft"], write: true, review: true },
   ),
-  tool("github_list_issues", "Show the open issues and pull requests of a repository.", {
+  tool("github_list_issues", "Open issues and pull requests in one repository.", {
     repo: text,
   }),
-  tool("github_get_issue", "Read a single issue or pull request.", { repo: text, number: count }),
+  tool("github_get_issue", "One issue or pull request by number.", { repo: text, number: count }),
   tool(
     "github_read_file",
-    "Read a text file stored in a repository.",
+    "The text of one file in a repository.",
     { repo: text, path: text, ref: text },
     { optional: ["ref"] },
   ),
   tool(
     "github_create_issue",
-    "Open an issue, but only when the task given asks for one.",
+    "Files a new issue. Only do this when the person asked for one.",
     { repo: text, title: text, body: z.string() },
     { write: true },
   ),
   tool(
     "github_comment",
-    "Comment on an issue or pull request, but only when the task given asks for it.",
+    "Adds a comment to an issue or pull request. Only do this when the person asked for one.",
     { repo: text, number: count, body: text },
     { write: true },
   ),
@@ -124,7 +124,7 @@ type Item = Record<string, unknown>;
 
 export function repository(name: unknown): string {
   if (typeof name !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(name) || name.includes("..")) {
-    throw new AppError("Name the repository as owner/name");
+    throw new AppError("Give the repository as owner/name");
   }
   return name;
 }
@@ -182,7 +182,7 @@ async function run(ctx: AppContext, name: string, a: Record<string, unknown>): P
     const items = data as Item[];
     if (name === "github_list_pull_request_files" && a.filename) {
       const selected = items.find((item) => item.filename === a.filename);
-      if (!selected) throw new AppError("That file is not on this page of the pull request");
+      if (!selected) throw new AppError("That filename is not among this page of changed files");
       const result = pick(selected, read.fields, false);
       const patch = typeof selected.patch === "string" ? selected.patch : null;
       const start = typeof a.offset === "number" ? a.offset : 0;
@@ -222,7 +222,7 @@ async function run(ctx: AppContext, name: string, a: Record<string, unknown>): P
       // A dot segment would be resolved by the URL and could leave the repository's contents.
       const parts = String(a.path).split("/");
       if (parts.some((part) => part === "." || part === "..")) {
-        throw new AppError("Use a file path inside the repository");
+        throw new AppError("Give a path to a file within the repository");
       }
       const path = parts.map(encodeURIComponent).join("/");
       const reply = await send(ctx.fetch, "GET", `${base}/contents/${path}`, {
