@@ -16,6 +16,62 @@ export interface Upgrade {
 }
 
 /**
+ * Up to schema 2 a person had one conversation per chat. Threads came with 3: the
+ * conversations table is rebuilt with a thread in its key, and the tables that point at a
+ * conversation gain a thread column. Everything from before lands in thread 0.
+ */
+function addThreads(): string[] {
+  return [
+    "CREATE TABLE IF NOT EXISTS session_owners(instance TEXT,session TEXT,chat INTEGER," +
+      "user INTEGER,title TEXT,provider TEXT,model TEXT,thinking TEXT,created REAL,updated REAL," +
+      "PRIMARY KEY(instance,session))",
+    "ALTER TABLE conversations RENAME TO conversations_without_threads",
+    "CREATE TABLE conversations(instance TEXT,chat INTEGER,user INTEGER,session TEXT," +
+      "persisted INTEGER DEFAULT 0,thread INTEGER NOT NULL DEFAULT 0," +
+      "PRIMARY KEY(instance,chat,user,thread))",
+    "INSERT INTO conversations(instance,chat,user,session,persisted,thread) " +
+      "SELECT instance,chat,user,session,persisted,0 FROM conversations_without_threads",
+    "DROP TABLE conversations_without_threads",
+    ...["inbox", "approvals", "session_owners"].map(
+      (table) => `ALTER TABLE ${table} ADD COLUMN thread INTEGER NOT NULL DEFAULT 0`,
+    ),
+  ];
+}
+
+/**
+ * Schema 4 put each chat's state in one routes table, with its messages, and remembered who
+ * owns each session. A file at 1, 2 or 3 reaches it in one step.
+ */
+const routes: Upgrade = {
+  reaches: 4,
+  lowest: 1,
+  statements: ({ from }) => [
+    "CREATE TABLE IF NOT EXISTS instances(id TEXT PRIMARY KEY, bot_id INTEGER)",
+    "CREATE TABLE IF NOT EXISTS poll_state(instance TEXT PRIMARY KEY, offset INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS session_status(instance TEXT, session TEXT, data TEXT, " +
+      "PRIMARY KEY(instance,session))",
+    ...(from < 3 ? addThreads() : []),
+    // Every conversation with a session already belongs to its chat and person.
+    "INSERT OR IGNORE INTO session_owners(instance,session,chat,user,thread,created,updated) " +
+      "SELECT instance,session,chat,user,thread,0,0 FROM conversations WHERE session IS NOT NULL",
+    "ALTER TABLE inbox ADD COLUMN route_user INTEGER",
+    "UPDATE inbox SET route_user=user",
+    "CREATE TABLE routes(id INTEGER PRIMARY KEY AUTOINCREMENT,instance TEXT NOT NULL," +
+      "chat INTEGER NOT NULL,user INTEGER NOT NULL,thread INTEGER NOT NULL DEFAULT 0," +
+      "session TEXT,session_file TEXT,title TEXT,provider TEXT,model TEXT,thinking TEXT," +
+      "created REAL NOT NULL,updated REAL NOT NULL,UNIQUE(instance,chat,user,thread))",
+    "CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT,instance TEXT NOT NULL," +
+      "route INTEGER NOT NULL,direction TEXT NOT NULL,text TEXT,platform_id TEXT,created REAL," +
+      "UNIQUE(instance,direction,platform_id))",
+    "CREATE TABLE instance_archive(instance TEXT PRIMARY KEY,archived REAL)",
+    "CREATE TABLE imports(instance TEXT,source TEXT,fingerprint TEXT,completed REAL," +
+      "PRIMARY KEY(instance,source))",
+    "CREATE INDEX inbox_pending ON inbox(instance,status,id)",
+    "CREATE INDEX routes_sessions ON routes(instance,session_file)",
+  ],
+};
+
+/**
  * Named bots, one of them the chief, and each route's chosen bot with its own session per bot.
  * Routes from before this step have no bot yet; the store gives them the chief when opened.
  */
@@ -234,6 +290,7 @@ const runContext: Upgrade = {
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
 export const UPGRADES: readonly Upgrade[] = [
+  routes,
   namedBots,
   delegations,
   scheduledJobs,

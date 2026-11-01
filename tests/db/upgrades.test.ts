@@ -11,7 +11,7 @@ import { FakeD1 } from "../support/fakeD1.ts";
 import { allRows, SHARED_FIXTURE, stepBack } from "./olderFile.ts";
 
 /** The versions a file can be found at and still be brought to 21 here. */
-const OLDER = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+const OLDER = Array.from({ length: 20 }, (_, index) => index + 1);
 
 type Row = Record<string, unknown>;
 
@@ -206,6 +206,40 @@ describe("upgrading a SQLite file from an older schema", () => {
       await db.close();
     }
   });
+
+  it.each([1, 2, 3])(
+    "gives a file at schema %i threads, routes and owners for its sessions",
+    async (version) => {
+      const path = olderFile(version);
+      const old = new BetterSqlite3(path, { readonly: true });
+      const chats = old.prepare("SELECT * FROM conversations WHERE session IS NOT NULL").all();
+      old.close();
+      expect(chats.length).toBeGreaterThan(0);
+      await open(path);
+      const db = new BetterSqlite3(path, { readonly: true });
+      try {
+        for (const chat of chats as Row[]) {
+          const kept = db
+            .prepare(
+              "SELECT session,thread FROM conversations WHERE instance=? AND chat=? AND user=?",
+            )
+            .all(chat.instance, chat.chat, chat.user);
+          expect(kept).toContainEqual({
+            session: chat.session,
+            thread: version < 3 ? 0 : chat.thread,
+          });
+          const owner = db
+            .prepare("SELECT chat,user FROM session_owners WHERE instance=? AND session=?")
+            .get(chat.instance, chat.session);
+          expect(owner).toEqual({ chat: chat.chat, user: chat.user });
+        }
+        const strays = db.prepare("SELECT count(*) AS n FROM inbox WHERE route_user IS NOT user");
+        expect(strays.get()).toEqual({ n: 0 });
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   it("makes no copy of a new or an up-to-date file", async () => {
     const place = folder();
