@@ -15,6 +15,15 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** The apps each bot has been granted. */
+const appGrants: Upgrade = {
+  reaches: 8,
+  statements: () => [
+    "CREATE TABLE bot_plugins(instance TEXT NOT NULL,bot TEXT NOT NULL,plugin TEXT NOT NULL," +
+      "PRIMARY KEY(instance,bot,plugin))",
+  ],
+};
+
 /** Background agents: their tasks, and temporary bots that exist only while one runs. */
 const backgroundTasks: Upgrade = {
   reaches: 9,
@@ -183,6 +192,7 @@ const runContext: Upgrade = {
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
 export const UPGRADES: readonly Upgrade[] = [
+  appGrants,
   backgroundTasks,
   memoryFacts,
   requestCounts,
