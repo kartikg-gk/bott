@@ -89,9 +89,12 @@ export interface SessionOptions {
   policy?: Policy;
   store?: SessionStore;
   contextWindow?: number;
+  /** Seconds since the epoch, as a float; approval deadlines are measured by it. */
+  clock?: () => number;
 }
 
 const APPROVAL_SECONDS = 600;
+const wallClock = () => Date.now() / 1000;
 
 const userEntry = (text: string): TranscriptEntry => ({
   role: "user",
@@ -407,7 +410,7 @@ export class AgentSession {
           .update(`${call.name}
 ${input}`)
           .digest("hex"),
-        expiresAt: Math.floor(Date.now() / 1000) + APPROVAL_SECONDS,
+        expiresAt: Math.floor((this.opts.clock ?? wallClock)()) + APPROVAL_SECONDS,
       });
       if (signal.aborted) settle(false);
       else signal.addEventListener("abort", onAbort);

@@ -7,6 +7,7 @@ import type { ProviderRequest, StreamEvent } from "../../src/agent/providers/typ
 import { emptyUsage, textOf } from "../../src/agent/transcript.ts";
 import type { Bot } from "../../src/bots/bots.ts";
 import type { Database } from "../../src/db/database.ts";
+import { Lease } from "../../src/db/leases.ts";
 import { Dispatcher } from "../../src/runtime/dispatcher.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
 import { Store } from "../../src/store/store.ts";
@@ -103,10 +104,13 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
   });
 
-  async function setup(provider: FakeProvider, opts: { policy?: Policy; workers?: number } = {}) {
+  async function setup(
+    provider: FakeProvider,
+    opts: { policy?: Policy; workers?: number; clock?: () => number } = {},
+  ) {
     const { db } = database(kind);
     open.push(db);
-    const store = await Store.open(db, "main", { clock: () => Date.now() / 1000 });
+    const store = await Store.open(db, "main", { clock: opts.clock ?? (() => Date.now() / 1000) });
     const root = mkdtempSync(join(tmpdir(), "dispatcher-"));
     folders.push(root);
     const config: RuntimeConfig = {
@@ -171,10 +175,20 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await status(second.id)).toBe("completed");
   });
 
+  /** Puts the person's route on a new bot of its own. */
+  async function onNewBot(store: Store, user: number, name: string): Promise<string> {
+    const bot = await store.createBot({ name, role: "helper" });
+    await store.switchBot(await store.conversation(WEB_CHAT, user), bot.id);
+    return bot.id;
+  }
+
   it("different routes run in parallel up to workers", async () => {
     const gates = { 0: new Gate(), 1: new Gate() };
     const provider = gated([reply("a"), reply("b"), reply("c")], gates);
     const { store, sink, dispatcher, status } = await setup(provider, { workers: 2 });
+    await onNewBot(store, 1, "Ada");
+    await onNewBot(store, 2, "Bea");
+    await onNewBot(store, 3, "Cy");
     await store.admitWeb(WEB_CHAT, 1, "from one");
     await store.admitWeb(WEB_CHAT, 2, "from two");
     const third = await store.admitWeb(WEB_CHAT, 3, "from three");
@@ -191,6 +205,82 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await dispatcher.idle();
     expect(sink.sent.map((s) => s.route.user).sort()).toEqual([1, 2, 3]);
     expect(await status(third.id)).toBe("completed");
+  });
+
+  it("two routes on one bot run one after the other", async () => {
+    const gate = new Gate();
+    const provider = gated([reply("a"), reply("b"), reply("c")], { 0: gate });
+    const { db, store, sink, dispatcher, status } = await setup(provider, { workers: 2 });
+    const first = await store.admitWeb(WEB_CHAT, 1, "from one");
+    const second = await store.admitWeb(WEB_CHAT, 2, "from two");
+
+    expect(await dispatcher.tick()).toBe(1);
+    await gate.reached;
+    expect(await status(first.id)).toBe("running");
+    expect(await dispatcher.tick()).toBe(0);
+    expect(await status(second.id)).toBe("pending");
+
+    gate.release();
+    await dispatcher.idle();
+    expect(await dispatcher.tick()).toBe(1);
+    await dispatcher.idle();
+    expect(sink.texts()).toEqual(["a", "b"]);
+    expect(await status(second.id)).toBe("completed");
+
+    // Another process holding the bot leaves the message waiting, not failed.
+    const chief = (await store.chief()).id;
+    const elsewhere = new Lease(db, `bot-${chief}`);
+    expect(await elsewhere.acquire()).toBe(true);
+    const third = await store.admitWeb(WEB_CHAT, 1, "later");
+    expect(await dispatcher.tick()).toBe(1);
+    await dispatcher.idle();
+    expect(await status(third.id)).toBe("pending");
+    expect(sink.texts()).toEqual(["a", "b"]);
+    await elsewhere.release();
+    expect(await dispatcher.tick()).toBe(1);
+    await dispatcher.idle();
+    expect(await status(third.id)).toBe("completed");
+    expect(sink.texts()).toEqual(["a", "b", "c"]);
+  });
+
+  it("approvals expire by the store clock", async () => {
+    let now = 1_800_000_000;
+    const provider = gated([
+      toolCall("Write", { path: "first.txt", content: "one" }),
+      reply("wrote it"),
+      toolCall("Write", { path: "second.txt", content: "two" }),
+      reply("did not"),
+    ]);
+    const { db, store, sessions, sink, dispatcher, status } = await setup(provider, {
+      policy: "ask",
+      clock: () => now,
+    });
+    const chief = (await store.bot((await store.chief()).id)) as Bot;
+    const root = sessions.workspaceFor(chief).root;
+
+    await store.admitWeb(WEB_CHAT, 7, "first");
+    expect(await dispatcher.tick()).toBe(1);
+    const inTime = await sink.nextCard();
+    expect(inTime.expiresAt).toBe(now + 600);
+    expect(dispatcher.approvals(7)).toEqual([inTime]);
+    now += 599;
+    expect(await dispatcher.decide(inTime.id, true, 7)).toBe(true);
+    await dispatcher.idle();
+    expect(readFileSync(join(root, "first.txt"), "utf8")).toBe("one");
+
+    const late = await store.admitWeb(WEB_CHAT, 7, "second");
+    expect(await dispatcher.tick()).toBe(1);
+    const card = await sink.nextCard();
+    expect(card.expiresAt).toBe(now + 600);
+    now += 601;
+    expect(dispatcher.approvals(7)).toEqual([]);
+    expect(await dispatcher.decide(card.id, true, 7)).toBe(true);
+    await dispatcher.idle();
+    expect(existsSync(join(root, "second.txt"))).toBe(false);
+    expect(await status(late.id)).toBe("completed");
+    expect(sink.texts().at(-1)).toBe("did not");
+    const row = (await db.query("SELECT decision FROM approvals WHERE id=?", [inTime.id]))[0];
+    expect(row).toMatchObject({ decision: "allowed" });
   });
 
   it("a failing run frees the route and reports the error", async () => {

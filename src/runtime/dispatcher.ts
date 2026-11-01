@@ -2,7 +2,7 @@ import type { SessionEvent } from "../agent/session.ts";
 import type { InboxItem, InboxStatus } from "../store/inbox.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
-import type { SessionManager } from "./sessions.ts";
+import { BotBusy, type SessionManager } from "./sessions.ts";
 import type { ApprovalCard, Sink } from "./sink.ts";
 
 type ApprovalRequest = Extract<SessionEvent, { type: "approval_requested" }>;
@@ -47,6 +47,8 @@ const CONTROLS = new Set([
 
 const CONTROL_NOTICE = "That command is not taken as a message here; use the controls on the page.";
 const QUEUE_FULL = "The prompt queue is full right now; retry later.";
+/** The longest delay a timer takes, in milliseconds. */
+const MAX_TIMER = 2 ** 31 - 1;
 const INTERRUPTED = "Task interrupted. It was not replayed.";
 
 /** Run approvals are not tied to a run of their own, so they all carry this run name. */
@@ -63,6 +65,10 @@ function isControl(item: InboxItem): boolean {
 interface Active {
   route: Route;
   item: InboxItem;
+  /** The bot the route is on; one run per bot at a time. */
+  bot: string;
+  /** The status the item waited in, restored when the bot turns out to be busy elsewhere. */
+  waiting: InboxStatus;
   /** Set by `stop`; a run that has not reached the session yet is aborted when it does. */
   stopped: boolean;
   /** Whether the session has sent any event, meaning the prompt reached it. */
@@ -181,19 +187,33 @@ export class Dispatcher {
 
   private async dispatch(): Promise<number> {
     let started = 0;
+    const chief = (await this.store.chief()).id;
     for (const item of await this.store.pending()) {
       const route = await this.store.conversation(item.chat, item.user, item.thread);
+      const bot = route.bot ?? chief;
       if (item.status === "rejected") {
         await this.answerOnly(item, route, QUEUE_FULL);
       } else if (isControl(item)) {
         await this.answerOnly(item, route, CONTROL_NOTICE);
-      } else if (!this.active.has(route.id) && this.active.size < this.workers) {
+      } else if (
+        !this.active.has(route.id) &&
+        this.active.size < this.workers &&
+        !this.botBusy(bot)
+      ) {
+        const waiting = item.status;
         if (!(await this.store.mark(item, "dispatching"))) continue;
-        this.launch(item, route);
+        this.launch(item, route, bot, waiting);
         started++;
       }
     }
     return started;
+  }
+
+  /** Whether the bot is running something here; other processes are found when the run starts. */
+  private botBusy(bot: string): boolean {
+    if (this.sessions.isBusy(bot)) return true;
+    for (const active of this.active.values()) if (active.bot === bot) return true;
+    return false;
   }
 
   /** Settles a message that gets a reply but no run. */
@@ -207,10 +227,12 @@ export class Dispatcher {
     }
   }
 
-  private launch(item: InboxItem, route: Route): void {
+  private launch(item: InboxItem, route: Route, bot: string, waiting: InboxStatus): void {
     const active: Active = {
       route,
       item,
+      bot,
+      waiting,
       stopped: false,
       started: false,
       chores: new Set(),
@@ -244,6 +266,11 @@ export class Dispatcher {
         await this.store.mark(item, "delivery_failed");
       }
     } catch (err) {
+      if (err instanceof BotBusy) {
+        // Another process is running the bot: the item waits for a later tick.
+        await this.store.mark(item, active.waiting).catch(() => {});
+        return;
+      }
       // Once the session has the prompt, what it did is unknown; before that, nothing ran.
       await this.store.mark(item, active.started ? "uncertain" : "failed").catch(() => {});
       await this.sessions.abort(route).catch(() => {});
@@ -314,9 +341,7 @@ export class Dispatcher {
     };
     const open: OpenCard = { card, active, deciding: false, timer: undefined };
     this.cards.set(card.id, open);
-    const wait = Math.max(0, (card.expiresAt - this.store.ctx.clock()) * 1000);
-    open.timer = setTimeout(() => void this.expire(card.id), wait);
-    open.timer.unref();
+    this.arm(open);
     try {
       await this.sink.approval(route, card);
     } catch {
@@ -326,10 +351,25 @@ export class Dispatcher {
     }
   }
 
+  /** Sets the card's timer for its deadline, by the store clock. */
+  private arm(open: OpenCard): void {
+    const left = (open.card.expiresAt - this.store.ctx.clock()) * 1000;
+    // A longer delay would overflow the timer; the timer then fires early and sets itself again.
+    open.timer = setTimeout(
+      () => void this.expire(open.card.id),
+      Math.min(MAX_TIMER, Math.max(0, left)),
+    );
+    open.timer.unref();
+  }
+
   /** Denies an approval nobody answered in time. */
   private async expire(id: string): Promise<void> {
     const open = this.cards.get(id);
     if (!open || open.deciding) return;
+    if (this.store.ctx.clock() < open.card.expiresAt) {
+      this.arm(open);
+      return;
+    }
     open.deciding = true;
     await this.respond(open, false);
     await this.resolve(id, false, "expired");

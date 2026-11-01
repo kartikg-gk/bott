@@ -27,6 +27,7 @@ import {
   STYLES,
   savedSession,
 } from "../bots/profiles.ts";
+import { Lease } from "../db/leases.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
 
@@ -70,6 +71,16 @@ export class RunFailed extends Error {
     super(answer || `The run ended ${outcome}.`);
   }
 }
+
+/** The bot is running a prompt or delegation here or in another process. */
+export class BotBusy extends Error {
+  constructor() {
+    super("This bot is busy; wait until it is done.");
+  }
+}
+
+/** How long a bot's database hold lasts without renewal; it is renewed well before then. */
+const BOT_LEASE_SECONDS = 60;
 
 const BASE =
   "You are an assistant working for the person in this conversation. Use your tools to read " +
@@ -138,6 +149,8 @@ export class SessionManager {
   private readonly locks = new Map<string, Mutex>();
   private readonly workspaces = new Map<string, Workspace>();
   private readonly creating = new Mutex();
+  /** Bots running a prompt or delegation in this process. */
+  private readonly activeBots = new Set<string>();
   /** Hosted transcripts, kept for as long as this manager lives. */
   private readonly memory = memorySessionStore();
   private readonly timer: NodeJS.Timeout;
@@ -167,10 +180,21 @@ export class SessionManager {
     return (await this.liveFor(route.id)).live.session;
   }
 
+  /** Whether this process is running a prompt or delegation on the bot. */
+  isBusy(botId: string): boolean {
+    return this.activeBots.has(botId);
+  }
+
+  /**
+   * Runs one prompt on the route. A prompt waits for its bot's other work in this process, and
+   * throws `BotBusy` when another process is running the bot.
+   */
   async prompt(route: Route, text: string, opts: PromptOptions = {}): Promise<Answer> {
-    const release = await this.lockRoute(route.id);
+    const releaseBot = await this.holdRouteBot(route.id);
+    let release: (() => void) | undefined;
     let live: Live | undefined;
     try {
+      release = await this.lockRoute(route.id);
       const found = await this.liveFor(route.id);
       live = found.live;
       live.busy = true;
@@ -184,7 +208,8 @@ export class SessionManager {
         live.busy = false;
         live.touched = this.now();
       }
-      release();
+      release?.();
+      await releaseBot();
     }
   }
 
@@ -263,9 +288,11 @@ export class SessionManager {
     const id = saved ? basename(saved, ".jsonl") : randomUUID();
     const sessionFile = saved ?? (await this.newFile(id));
     if (!saved && sessionFile) await rememberSession(this.store, target.id, { sessionFile });
-    const release = await this.lockFor(sessionKey(id)).acquire();
+    const releaseBot = await this.holdBot(target.id, false);
+    let release: (() => void) | undefined;
     let live: Live | undefined;
     try {
+      release = await this.lockFor(sessionKey(id)).acquire();
       // A cached copy would miss this run's messages; it reloads on its next use.
       this.drop(sessionKey(id));
       live = await this.create(target, await this.build(target), id, sessionFile, {
@@ -288,7 +315,8 @@ export class SessionManager {
       }
       // Anything loaded while this ran missed its messages.
       this.drop(sessionKey(id));
-      release();
+      release?.();
+      await releaseBot();
     }
   }
 
@@ -325,6 +353,58 @@ export class SessionManager {
       this.locks.set(key, lock);
     }
     return lock;
+  }
+
+  /** Holds the bot the route is on, rechecking in case the route moved to another while waiting. */
+  private async holdRouteBot(routeId: number): Promise<() => Promise<void>> {
+    for (;;) {
+      const botId = await this.botOf(await this.current(routeId));
+      const release = await this.holdBot(botId, true);
+      if ((await this.botOf(await this.current(routeId))) === botId) return release;
+      await release();
+    }
+  }
+
+  private async botOf(route: Route): Promise<string> {
+    return route.bot ?? (await this.store.chief()).id;
+  }
+
+  /**
+   * Holds a bot for one run: in this process by its lock, and across processes by a database
+   * lease kept alive while the run lasts. Without `wait`, a bot busy here is refused at once.
+   */
+  private async holdBot(botId: string, wait: boolean): Promise<() => Promise<void>> {
+    if (!wait && this.activeBots.has(botId)) throw new BotBusy();
+    const unlock = await this.lockFor(`bot:${botId}`).acquire();
+    this.activeBots.add(botId);
+    const lease = new Lease(this.store.ctx.db, `bot-${botId}`, {
+      ttlSeconds: BOT_LEASE_SECONDS,
+      clock: () => this.now() * 1000,
+    });
+    let held = false;
+    try {
+      held = await lease.acquire();
+    } finally {
+      if (!held) {
+        this.activeBots.delete(botId);
+        unlock();
+      }
+    }
+    if (!held) throw new BotBusy();
+    const renewal = setInterval(
+      () => void lease.renew().catch(() => {}),
+      (BOT_LEASE_SECONDS * 1000) / 3,
+    );
+    renewal.unref();
+    return async () => {
+      clearInterval(renewal);
+      try {
+        await lease.release();
+      } finally {
+        this.activeBots.delete(botId);
+        unlock();
+      }
+    };
   }
 
   /** Locks whatever session the route points at, rechecking in case it moved while waiting. */
@@ -437,6 +517,7 @@ export class SessionManager {
       skills: built.skills,
       policy: opts.policy ?? this.config.policy,
       store: this.storeFor(sessionFile),
+      clock: () => this.now(),
     });
     return new Live(session, bot.id, built.signature, sessionFile, this.now());
   }
