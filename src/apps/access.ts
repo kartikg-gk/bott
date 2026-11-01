@@ -56,7 +56,10 @@ export class BotApps {
     const parsed = loadInput.safeParse(input);
     const name = parsed.success ? parsed.data.name : undefined;
     if (name === undefined || !(await this.enabled(botId)).includes(name)) {
-      return { output: errorOutput("That app is not granted to this bot, or not connected yet"), tools: [] };
+      return {
+        output: errorOutput("That app is not granted to this bot, or not connected yet"),
+        tools: [],
+      };
     }
     const app = this.runner.apps[name];
     const tools = (app?.tools ?? []).map(hostTool);
