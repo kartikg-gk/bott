@@ -171,6 +171,8 @@ export interface TeamContext {
   bot?: Bot | undefined;
   /** Takes the events of a delegated run, so its approvals reach the person. */
   onEvent?: EventObserver | undefined;
+  /** Aborts when the calling run stops; a delegation it started stops with it. */
+  signal?: AbortSignal | undefined;
 }
 
 const JOB_TOOLS = new Set(["schedule_job", "list_scheduled_jobs", "cancel_scheduled_job"]);
@@ -215,7 +217,10 @@ async function delegate(ctx: TeamContext, botName: string, task: string): Promis
   let status: "completed" | "failed" | "cancelled" | "interrupted" = "interrupted";
   let answer = "";
   try {
-    answer = await sessions.delegate(route, target, task, { onEvent: ctx.onEvent });
+    answer = await sessions.delegate(route, target, task, {
+      onEvent: ctx.onEvent,
+      signal: ctx.signal,
+    });
     status = "completed";
   } catch (error) {
     if (error instanceof RunFailed) {

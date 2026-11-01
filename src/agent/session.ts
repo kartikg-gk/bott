@@ -85,7 +85,8 @@ export interface SessionOptions {
   tools?: ToolSpec[];
   skills?: Skill[];
   hostTools?: HostTool[];
-  answerHostTool?: (call: HostToolCall) => Promise<ToolOutput>;
+  /** `signal` aborts when the run stops, so work the call started can stop with it. */
+  answerHostTool?: (call: HostToolCall, signal: AbortSignal) => Promise<ToolOutput>;
   policy?: Policy;
   store?: SessionStore;
   contextWindow?: number;
@@ -463,7 +464,7 @@ ${input}`)
           signal.addEventListener("abort", onAbort, { once: true });
         });
         try {
-          return await Promise.race([answer(call), aborted]);
+          return await Promise.race([answer(call, signal), aborted]);
         } finally {
           signal.removeEventListener("abort", onAbort);
         }

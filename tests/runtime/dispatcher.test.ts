@@ -416,6 +416,38 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await dispatcher.stop(route)).toEqual({ stopped: false, cleared: 0 });
   });
 
+  it("stopping the chief stops its running delegation and frees the bot", async () => {
+    const gate = new Gate();
+    const provider = gated(
+      [
+        toolCall("delegate_task", { bot_name: "Writer", task: "think it over" }),
+        // The held call never takes its reply, so this is what the writer's next call gets.
+        reply("still the writer"),
+      ],
+      { 1: gate },
+    );
+    const { db, store, sessions, dispatcher, status } = await setup(provider);
+    const writer = await store.createBot({ name: "Writer", role: "Drafts text" });
+    const item = await store.admitWeb(WEB_CHAT, 7, "ask the writer");
+    const route = await store.conversation(WEB_CHAT, 7);
+
+    expect(await dispatcher.tick()).toBe(1);
+    await gate.reached;
+    expect(sessions.isBusy(writer.id)).toBe(true);
+    expect(await dispatcher.stop(route)).toEqual({ stopped: true, cleared: 0 });
+    expect(await status(item.id)).toBe("cancelled");
+
+    for (let i = 0; i < 400 && sessions.isBusy(writer.id); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(sessions.isBusy(writer.id)).toBe(false);
+    const rows = await db.query("SELECT status FROM delegations WHERE bot=?", [writer.id]);
+    expect(rows).toEqual([{ status: "cancelled" }]);
+    expect(await db.query("SELECT name FROM leases")).toEqual([]);
+    // The writer is free for new work at once.
+    expect(await sessions.delegate(route, writer, "something else")).toBe("still the writer");
+  });
+
   it("steer reaches a running session and is refused when idle", async () => {
     const gate = new Gate();
     const provider = gated([reply("first part"), reply("steered")], { 0: gate });

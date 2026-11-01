@@ -309,7 +309,7 @@ export class SessionManager {
     route: Route,
     bot: Pick<Bot, "id">,
     task: string,
-    opts: PromptOptions & { policy?: Policy } = {},
+    opts: PromptOptions & { policy?: Policy; signal?: AbortSignal | undefined } = {},
   ): Promise<string> {
     const target = await this.store.bot(bot.id);
     if (!target) throw new Error("The bot was deleted");
@@ -614,7 +614,7 @@ export class SessionManager {
     // the route is who it acts for.
     const team = {
       hostTools: bot.chief ? [...teamTools(), ...jobTools()] : jobTools(),
-      answerHostTool: (call: HostToolCall) =>
+      answerHostTool: (call: HostToolCall, signal: AbortSignal) =>
         answerTeamCall(
           {
             store: this.store,
@@ -624,6 +624,7 @@ export class SessionManager {
             agents: this.agents,
             bot,
             onEvent: this.relayApprovals(route, route.user),
+            signal,
           },
           call,
         ),
