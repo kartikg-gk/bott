@@ -45,6 +45,7 @@ function toBot(row: Row): Bot {
   };
 }
 
+/** Matches names the way the stored name_key column does. */
 const keyOf = (name: string) => name.trim().toLowerCase();
 
 /** The chief first, then the rest in creation order. Temporary bots only when asked for. */
@@ -115,17 +116,42 @@ export async function keepBot(ctx: StoreContext, id: string): Promise<boolean> {
   return changed > 0;
 }
 
-/** Removes a bot and what it owned. The chief stays; returns false for an unknown id. */
+const OWNED = [
+  "bot_plugins",
+  "bot_profiles",
+  "bot_sessions",
+  "bot_chat",
+  "bot_memory",
+  "route_bots",
+  "web_bot_routes",
+];
+
+/**
+ * Removes a temporary bot and the rows it owns. Kept bots and the chief are refused. The bot row
+ * goes last, so a removal that stopped midway can simply be run again. Returns false when the bot
+ * is already gone.
+ */
 export async function removeBot(ctx: StoreContext, id: string): Promise<boolean> {
   const found = await bot(ctx, id);
   if (!found) return false;
   if (found.chief) throw new Error("The chief of staff cannot be removed");
+  if (!found.temporary) throw new Error("Only a temporary bot can be removed");
   const { db, instance } = ctx;
-  for (const table of ["bot_plugins", "bot_profiles", "bot_sessions", "bot_chat"]) {
-    await db.run(`DELETE FROM ${table} WHERE instance=? AND bot=?`, [instance, id]);
+  const busy = await db.query(
+    "SELECT 1 FROM delegations WHERE instance=? AND bot=? AND status='running'",
+    [instance, id],
+  );
+  if (busy.length > 0) throw new Error(`${found.name} is busy with another task.`);
+  for (const table of OWNED) {
+    const column = table === "route_bots" ? "" : "instance=? AND ";
+    const params = table === "route_bots" ? [id] : [instance, id];
+    await db.run(`DELETE FROM ${table} WHERE ${column}bot=?`, params);
   }
   return (
-    (await db.run("DELETE FROM bots WHERE instance=? AND id=? AND chief=0", [instance, id])) > 0
+    (await db.run("DELETE FROM bots WHERE instance=? AND id=? AND temporary=1 AND chief=0", [
+      instance,
+      id,
+    ])) > 0
   );
 }
 

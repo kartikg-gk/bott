@@ -80,14 +80,53 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await store.keepBot(scout.id)).toBe(false);
     expect((await store.bot(scout.id))?.temporary).toBe(false);
     await expect(store.createBot({ name: "", role: "x" })).rejects.toThrow("needs a name");
+    const draft = await store.createBot({ name: "Draft", role: "r", temporary: true });
+    expect(await store.removeBot(draft.id)).toBe(true);
+    expect(await store.bot(draft.id)).toBeNull();
+    expect(await store.removeBot(draft.id)).toBe(false);
+  });
 
-    await store.setPlugin(scout.id, "web", true);
-    await recordChat(store, scout.id, "user", "hi");
-    expect(await store.removeBot(scout.id)).toBe(true);
-    expect(await store.bot(scout.id)).toBeNull();
-    expect(await store.pluginsFor(scout.id)).toEqual([]);
-    expect(await db.query("SELECT 1 FROM bot_chat WHERE bot=?", [scout.id])).toEqual([]);
-    expect(await store.removeBot(scout.id)).toBe(false);
+  it("a kept bot cannot be removed", async () => {
+    const { store } = await fresh();
+    const kept = await store.createBot({ name: "Kept", role: "r" });
+    await expect(store.removeBot(kept.id)).rejects.toThrow("Only a temporary bot");
+    expect((await store.bot(kept.id))?.name).toBe("Kept");
+    const turned = await store.createBot({ name: "Turned", role: "r", temporary: true });
+    await store.keepBot(turned.id);
+    await expect(store.removeBot(turned.id)).rejects.toThrow("Only a temporary bot");
+  });
+
+  it("removing a temporary bot leaves no rows pointing at it", async () => {
+    const { store, db } = await fresh();
+    const temp = await store.createBot({ name: "Temp", role: "r", temporary: true });
+    await store.setPlugin(temp.id, "web", true);
+    await saveProfile(store, temp.id, { voice: "x" });
+    await rememberSession(store, temp.id, { sessionFile: "/s.jsonl" });
+    await recordChat(store, temp.id, "user", "hi");
+    await db.run("INSERT INTO bot_memory VALUES('main',?,'a.md','c',1)", [temp.id]);
+    await db.run("INSERT INTO route_bots(route,bot) VALUES(1,?)", [temp.id]);
+    await db.run("INSERT INTO web_bot_routes VALUES('main',1,?,5)", [temp.id]);
+    await db.run(
+      "INSERT INTO delegations(instance,route,bot,task,status,created) VALUES('main',1,?,'t','running',1)",
+      [temp.id],
+    );
+    await expect(store.removeBot(temp.id)).rejects.toThrow("busy");
+    expect(await store.bot(temp.id)).not.toBeNull();
+    await db.run("UPDATE delegations SET status='completed' WHERE bot=?", [temp.id]);
+    expect(await store.removeBot(temp.id)).toBe(true);
+    for (const table of [
+      "bots",
+      "bot_plugins",
+      "bot_profiles",
+      "bot_sessions",
+      "bot_chat",
+      "bot_memory",
+      "route_bots",
+      "web_bot_routes",
+    ]) {
+      const column = table === "bots" ? "id" : "bot";
+      expect(await db.query(`SELECT 1 FROM ${table} WHERE ${column}=?`, [temp.id])).toEqual([]);
+    }
   });
 
   it("duplicate names are refused case-insensitively", async () => {
