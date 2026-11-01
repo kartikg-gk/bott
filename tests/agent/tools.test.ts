@@ -116,7 +116,7 @@ describe("file tools", () => {
 
 function fakeWorkspace(result: Partial<RunResult>, seen?: { opts?: unknown }): Workspace {
   return {
-    root,
+    ...localWorkspace(root),
     async run(_command, opts) {
       if (seen) seen.opts = opts;
       return { code: 0, stdout: "", stderr: "", timedOut: false, ...result };

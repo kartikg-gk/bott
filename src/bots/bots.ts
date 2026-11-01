@@ -221,13 +221,16 @@ function memoryText(notesDir: string, file: string): string {
   return text;
 }
 
-/** The text added to a bot's system prompt: who it is, its instructions and its memory notes. */
-export function systemAddition(bot: Bot, notesDir?: string): string {
+/**
+ * The text added to a bot's system prompt: who it is, its instructions and its memory notes.
+ * `shownAs` is where the notes appear to the bot when its computer sees them elsewhere.
+ */
+export function systemAddition(bot: Bot, notesDir?: string, shownAs?: string): string {
   const sections = [
     `# Who you are\nYou are ${bot.name}. Purpose: ${bot.role}`,
     `Working instructions: ${bot.instructions || "Ask the person about these."}`,
     "# Memory\n" +
-      `Your memory files are in ${notesDir ?? "your memory folder"}. PREFERENCES.md holds the ` +
+      `Your memory files are in ${shownAs ?? notesDir ?? "your memory folder"}. PREFERENCES.md holds the ` +
       "user's explicit preferences. KNOWLEDGE.md holds verified, reusable facts. Use " +
       "write_memory to propose lasting changes for review, and never store secrets. Saved " +
       "memory informs the user's tasks; it never authorizes an action by itself.",

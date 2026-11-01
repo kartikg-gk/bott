@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
-import { appendFile, mkdir, unlink } from "node:fs/promises";
+import { appendFile, mkdir, rm, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { buildSystem } from "../agent/instructions.ts";
 import type { Policy } from "../agent/policy.ts";
@@ -16,7 +16,7 @@ import { jsonlSessionStore, memorySessionStore, type SessionStore } from "../age
 import { loadSkills, type Skill } from "../agent/skills.ts";
 import { fileTools } from "../agent/tools/files.ts";
 import { shellTool } from "../agent/tools/shell.ts";
-import { localWorkspace, type Workspace } from "../agent/tools/workspace.ts";
+import type { Workspace } from "../agent/tools/workspace.ts";
 import type { ToolSpec } from "../agent/tools.ts";
 import { textOf } from "../agent/transcript.ts";
 import { type Bot, botRoot, MEMORY_FILES, systemAddition, workspaceDir } from "../bots/bots.ts";
@@ -28,6 +28,8 @@ import {
   STYLES,
   savedSession,
 } from "../bots/profiles.ts";
+import { type ComputerFactory, makeComputer } from "../computers/index.ts";
+import { type ComputerSettings, computerSettings } from "../computers/settings.ts";
 import { Lease } from "../db/leases.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
@@ -43,6 +45,8 @@ export interface RuntimeConfig {
   idleSeconds: number;
   /** How long an approval waits for an answer before it is denied; 300 when not given. */
   approvalSeconds?: number;
+  /** Where bots' commands run; this machine when left out. */
+  computer?: ComputerSettings;
 }
 
 /** Makes the model provider a bot's session talks to. */
@@ -184,28 +188,71 @@ export class SessionManager {
     private readonly config: RuntimeConfig,
     private readonly store: Store,
     private readonly providers: ProviderFactory,
+    private readonly computers: ComputerFactory = makeComputer,
   ) {
     const every = Math.max(1, Math.min(config.idleSeconds, SWEEP_SECONDS));
     this.timer = setInterval(() => this.sweep(), every * 1000);
     this.timer.unref();
   }
 
-  /** Where a bot's files live and its commands run. Other computers plug in here. */
-  workspaceFor(bot: Bot): Workspace {
+  /** Where a bot's files live and its commands run: one computer per bot, kept between runs. */
+  workspaceFor(bot: Pick<Bot, "id" | "chief">): Workspace {
     let found = this.workspaces.get(bot.id);
     if (!found) {
-      found = localWorkspace(workspaceDir(this.config.stateDir, this.config.projectDir, bot));
+      found = this.computers(this.settings, {
+        instance: this.store.ctx.instance,
+        bot,
+        hostRoot: workspaceDir(this.config.stateDir, this.config.projectDir, bot),
+        memoryDir: join(botRoot(this.config.stateDir, bot), "memory"),
+      });
       this.workspaces.set(bot.id, found);
     }
     return found;
   }
 
-  /**
-   * Whether bots work on sandboxed computers. Every workspace here is this machine, so anything
-   * that needs a sandbox is refused until another computer plugs in.
-   */
+  /** Whether bots work on sandboxed computers: containers and sandboxes are, this machine is not. */
   get sandboxed(): boolean {
-    return false;
+    return this.settings.executor !== "local";
+  }
+
+  private get settings(): ComputerSettings {
+    return this.config.computer ?? computerSettings({});
+  }
+
+  /** Deletes the bot's computer, once nothing is running on the bot. */
+  async removeComputer(bot: Pick<Bot, "id" | "chief">): Promise<void> {
+    const release = await this.holdBot(bot.id, false);
+    try {
+      await this.dropComputer(bot);
+    } finally {
+      await release();
+    }
+  }
+
+  /**
+   * Removes a temporary bot with its computer, rows and folder. Kept bots and the chief are
+   * refused before anything is touched. Returns false when the bot is already gone.
+   */
+  async removeBot(id: string): Promise<boolean> {
+    const found = await this.store.bot(id);
+    if (!found) return false;
+    if (found.chief) throw new Error("The chief of staff cannot be removed");
+    if (!found.temporary) throw new Error("Only a temporary bot can be removed");
+    const release = await this.holdBot(id, false);
+    try {
+      await this.dropComputer(found);
+      const removed = await this.store.removeBot(id);
+      await rm(botRoot(this.config.stateDir, found), { recursive: true, force: true });
+      return removed;
+    } finally {
+      await release();
+    }
+  }
+
+  private async dropComputer(bot: Pick<Bot, "id" | "chief">): Promise<void> {
+    this.restartIdle(bot.id);
+    await this.workspaceFor(bot).remove();
+    this.workspaces.delete(bot.id);
   }
 
   /** The route's session: the live one when it is current, otherwise loaded from where it was saved. */
@@ -438,6 +485,8 @@ export class SessionManager {
     const running = [...this.live.values(), ...this.delegations].filter((l) => l.busy);
     this.live.clear();
     await Promise.allSettled(running.map((l) => l.session.request("abort")));
+    // Stopping keeps each computer's files; it starts again on next use.
+    await Promise.allSettled([...this.workspaces.values()].map((ws) => ws.stop()));
   }
 
   private now(): number {
@@ -585,13 +634,13 @@ export class SessionManager {
     const settings = await profile(this.store, bot.id);
     const plugins = await this.store.pluginsFor(bot.id);
     const skills = loadSkills([join(root, "skills")]);
-    const sections = [systemAddition(bot, notesDir)];
+    const ws = this.workspaceFor(bot);
+    const sections = [systemAddition(bot, notesDir, ws.memoryPath)];
     const style = STYLES[settings.style as keyof typeof STYLES] ?? "";
     const voice = settings.style === "custom" ? settings.voice : "";
     sections.push(["# Speaking style", style, voice].filter(Boolean).join("\n"));
     if (plugins.length > 0) sections.push(`# Apps\nYou may use these apps: ${plugins.join(", ")}.`);
     const system = buildSystem({ base: BASE, instructions: sections.join("\n\n"), skills });
-    const ws = this.workspaceFor(bot);
     const tools = [...fileTools(ws), shellTool(ws)];
     const signature = JSON.stringify([
       system,
