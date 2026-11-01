@@ -176,7 +176,7 @@ export class Documents {
     args: { page?: number; offset?: number },
   ): Promise<Record<string, unknown>> {
     const data = Buffer.from(bytes);
-    if (data.length > MAX_DOCUMENT_BYTES) throw new AppError("The attachment is larger than 8 MiB");
+    if (data.length > MAX_DOCUMENT_BYTES) throw new AppError("Attachments over 8 MiB are not read");
     const kind = documentKind(data, mime);
     const page = args.page ?? 1;
     const start = args.offset ?? 0;

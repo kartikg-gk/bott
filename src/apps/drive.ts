@@ -249,12 +249,12 @@ async function extractDocument(
   }
   if (!EXTRACTABLE.has(mime)) throw new AppError("Pick a stored PDF, PNG or JPEG to read");
   if (Number(metadata.size ?? 0) > MAX_DOCUMENT_BYTES) {
-    throw new AppError("The attachment is larger than 8 MiB");
+    throw new AppError("Attachments over 8 MiB are not read");
   }
   const url = `${DRIVE_API}/${segment(fileId)}`;
   const params = { alt: "media", supportsAllDrives: "true" };
   const { data, more } = await mediaPage(api, url, params, 0, MAX_DOCUMENT_BYTES, false);
-  if (more) throw new AppError("The attachment is larger than 8 MiB");
+  if (more) throw new AppError("Attachments over 8 MiB are not read");
   if (version && (await currentVersion(api, fileId)) !== version) {
     throw new AppError("The attachment changed while downloading; please retry.");
   }
@@ -271,7 +271,7 @@ export const drive: App = {
     if (name === "drive_read_file") return jsonOutput(await readFile(api, args));
     if (name === "drive_extract_document") {
       const documents = ctx.services.documents;
-      if (!documents) throw new AppError("Document extraction is not available on this server");
+      if (!documents) throw new AppError("This server cannot turn documents into text");
       return jsonOutput(await extractDocument(api, args, documents));
     }
     throw new AppError("Unknown tool");

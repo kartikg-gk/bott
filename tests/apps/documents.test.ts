@@ -132,7 +132,7 @@ describe("documents", () => {
     });
     await expect(
       apps.run("gmail_extract_attachment", { message_id: "m1", part: "0.1" }),
-    ).rejects.toThrow("The attachment is larger than 8 MiB");
+    ).rejects.toThrow("Attachments over 8 MiB are not read");
     expect(parse(await apps.run("drive_extract_document", { file_id: "f1" }))).toMatchObject({
       id: "f1",
       version: "3",

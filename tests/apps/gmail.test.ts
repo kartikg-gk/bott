@@ -120,14 +120,14 @@ describe("gmail", () => {
     });
     await expect(
       apps.run("gmail_read_attachment", { message_id: "m1", part: "0.2" }),
-    ).rejects.toThrow("This attachment holds binary data; read it with format base64.");
+    ).rejects.toThrow("That attachment is not text; ask for it as base64.");
     const binary = parse(
       await apps.run("gmail_read_attachment", { message_id: "m1", part: "0.2", format: "base64" }),
     );
     expect(Buffer.from(binary.content, "base64")).toEqual(png);
     await expect(
       apps.run("gmail_read_attachment", { message_id: "m1", part: "0.0" }),
-    ).rejects.toThrow("That attachment is not part of the message");
+    ).rejects.toThrow("The message has no part with that ID");
   });
 
   it("changes labels only with a real change", async () => {
@@ -144,9 +144,9 @@ describe("gmail", () => {
     expect(fetcher.seen.at(-1)?.json).toEqual({ addLabelIds: ["L1"], removeLabelIds: [] });
     await expect(
       apps.run("gmail_modify_labels", { id: "t1", add: ["L1"], remove: ["L1"] }),
-    ).rejects.toThrow("Give at least one label to change");
+    ).rejects.toThrow("Name a label to add or remove");
     await expect(apps.run("gmail_modify_labels", { id: "m2", add: ["L1"] })).rejects.toThrow(
-      "Gmail refused the label change; check permissions or connect Gmail again in Apps.",
+      "The mailbox refused to change labels. Reconnect Gmail in Apps if access is missing.",
     );
   });
 
@@ -157,7 +157,7 @@ describe("gmail", () => {
     });
     const apps = new AppRunner({ fetch: fetcher, env: ENV });
     const mail = { to: "bo@example.com", subject: "Hi", body: "Line one" };
-    expect(await apps.run("gmail_create_draft", mail)).toBe("The draft is saved and has not been sent.");
+    expect(await apps.run("gmail_create_draft", mail)).toBe("Saved as a draft; nothing was sent.");
     const draft = fetcher.seen.at(-1)?.json;
     const raw = Buffer.from(draft.message.raw, "base64url").toString();
     expect(raw).toContain("To: bo@example.com\r\n");
@@ -178,7 +178,7 @@ describe("gmail", () => {
       "Hallo Welt ✓",
     );
     expect(() => rawMessage({ to: "a@example.com\r\nBcc: x@y.z", subject: "s", body: "" })).toThrow(
-      "one line",
+      "line breaks",
     );
   });
 

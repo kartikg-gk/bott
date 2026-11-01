@@ -13,46 +13,48 @@ export const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const mail = { to: text, subject: text, body: z.string() };
 
 const tools = [
-  tool("gmail_search", "Search the mailbox in Gmail and get message IDs back.", { query: text }),
-  tool("gmail_read", "Read a Gmail message and list its attachments with their part IDs.", {
+  tool("gmail_search", "Finds messages in the person's mailbox and gives back their IDs.", {
+    query: text,
+  }),
+  tool("gmail_read", "One message, plus each attachment and the part ID to fetch it by.", {
     id: text,
   }),
   tool(
     "gmail_read_thread",
-    "Read five messages at a time from a Gmail thread, passing the nextOffset returned.",
+    "Five messages of a conversation at a time; send nextOffset back for the next five.",
     { id: text, offset },
     { optional: ["offset"] },
   ),
   tool(
     "gmail_read_attachment",
-    "Read an attachment using its part ID from a message. " +
-      "Use base64 for binary content; pass nextOffset to read on.",
+    "Fetches an attachment by the part ID a message lists. " +
+      "Binary files need base64. Send nextOffset back to keep going.",
     { message_id: text, part: text, offset, format: z.enum(["text", "base64"]) },
     { optional: ["offset", "format"] },
   ),
   tool(
     "gmail_extract_attachment",
-    "Extract a page of a PDF, PNG or JPEG Gmail attachment on the server. " +
-      "Use a message's part ID and pass nextOffset to continue.",
+    "Turns one page of a PDF, PNG or JPEG attachment into text on the server. " +
+      "Takes the part ID from a message; send nextOffset back to keep going.",
     { message_id: text, part: text, page: z.number().int().min(1).max(100), offset },
     { optional: ["page", "offset"] },
   ),
-  tool("gmail_list_labels", "Show Gmail labels with their IDs.", {}),
+  tool("gmail_list_labels", "Every mailbox label with its ID.", {}),
   tool(
     "gmail_modify_labels",
-    "Put existing labels on, or take them off, a Gmail message or thread.",
+    "Puts labels that already exist on a message or conversation, or takes them off.",
     { id: text, target: z.enum(["message", "thread"]), add: textList, remove: textList },
     { optional: ["target", "add", "remove"], write: true, review: true },
   ),
   tool(
     "gmail_send",
-    "Send a plain-text Gmail message, only when the task plainly asks for it to be sent.",
+    "Sends a plain-text email. Only when the person has plainly asked for it to go out.",
     mail,
     { write: true, review: true },
   ),
   tool(
     "gmail_create_draft",
-    "Save a Gmail draft for review; drafts are never sent from here.",
+    "Saves an email as a draft for the person to look over. Nothing is sent.",
     mail,
     { write: true },
   ),
@@ -115,7 +117,8 @@ export function mailMessage(data: Item, bodyLimit = 8000): Item {
 }
 
 function headerWord(value: string): string {
-  if (/[\r\n]/.test(value)) throw new AppError("Keep the recipient and subject on one line");
+  if (/[\r\n]/.test(value))
+    throw new AppError("The recipient and subject may not contain line breaks");
   if (/^[\x20-\x7e]*$/.test(value)) return value;
   return `=?utf-8?B?${Buffer.from(value).toString("base64")}?=`;
 }
@@ -149,7 +152,8 @@ export async function gmailHeaders(ctx: AppContext): Promise<Record<string, stri
       grant_type: "refresh_token",
     },
   });
-  if (typeof reply?.access_token !== "string") throw new AppError("Gmail did not renew access");
+  if (typeof reply?.access_token !== "string")
+    throw new AppError("The mailbox would not issue a fresh access token");
   return { authorization: `Bearer ${reply.access_token}` };
 }
 
@@ -169,7 +173,7 @@ export async function attachmentData(
   for (const [path, part] of mimeParts(data.payload ?? {})) {
     if (path === partPath && isAttachment(part)) selected = part;
   }
-  if (!selected) throw new AppError("That attachment is not part of the message");
+  if (!selected) throw new AppError("The message has no part with that ID");
   beforeDownload(selected);
   let body: Item = selected.body ?? {};
   if (body.attachmentId) {
@@ -194,7 +198,7 @@ async function readAttachment(ctx: AppContext, headers: Record<string, string>, 
     try {
       decoded = new TextDecoder("utf-8", { fatal: true }).decode(raw);
     } catch {
-      throw new AppError("This attachment holds binary data; read it with format base64.");
+      throw new AppError("That attachment is not text; ask for it as base64.");
     }
     end = start + 2500;
     content = decoded.slice(start, end);
@@ -213,19 +217,19 @@ async function readAttachment(ctx: AppContext, headers: Record<string, string>, 
 /** Extracts a page of text from an attachment, downloading no more than the size limits. */
 async function extractAttachment(ctx: AppContext, headers: Record<string, string>, a: Item) {
   const documents = ctx.services.documents;
-  if (!documents) throw new AppError("Document extraction is not available on this server");
+  if (!documents) throw new AppError("This server cannot turn documents into text");
   const load = async (path: string) => {
     const reply = await send(ctx.fetch, "GET", GMAIL_API + path, { headers });
     const body = await boundedBytes(
       reply,
       MAX_GMAIL_RESPONSE,
-      "The attachment exceeds the server extraction size limit",
+      "The attachment is larger than this server will turn into text",
     );
     return JSON.parse(Buffer.from(body).toString("utf8")) as Item;
   };
   const { part, raw } = await attachmentData(ctx, headers, a.message_id, a.part, load, (found) => {
     if (Number(found.body?.size ?? 0) > MAX_DOCUMENT_BYTES) {
-      throw new AppError("The attachment is larger than 8 MiB");
+      throw new AppError("Attachments over 8 MiB are not read");
     }
   });
   return jsonOutput({
@@ -267,9 +271,7 @@ export async function runGmail(ctx: AppContext, name: string, a: Item): Promise<
       const add: string[] = (a.add ?? []).map(gmailId);
       const remove: string[] = (a.remove ?? []).map(gmailId);
       if ((!add.length && !remove.length) || add.some((label) => remove.includes(label))) {
-        throw new AppError(
-          "Give at least one label to change, and never add and remove the same one",
-        );
+        throw new AppError("Name a label to add or remove, and never the same label for both");
       }
       const resource = a.target === "thread" ? "threads" : "messages";
       try {
@@ -280,7 +282,7 @@ export async function runGmail(ctx: AppContext, name: string, a: Item): Promise<
       } catch (error) {
         if (error instanceof HttpError && error.status === 403) {
           throw new AppError(
-            "Gmail refused the label change; check permissions or connect Gmail again in Apps.",
+            "The mailbox refused to change labels. Reconnect Gmail in Apps if access is missing.",
           );
         }
         throw error;
@@ -297,7 +299,9 @@ export async function runGmail(ctx: AppContext, name: string, a: Item): Promise<
         GMAIL_API + (sending ? "/messages/send" : "/drafts"),
         { headers, json: sending ? raw : { message: raw } },
       );
-      return sending ? jsonOutput({ sent: true, id: reply.id }) : "The draft is saved and has not been sent.";
+      return sending
+        ? jsonOutput({ sent: true, id: reply.id })
+        : "Saved as a draft; nothing was sent.";
     }
     default:
       throw new AppError("Unknown tool");
