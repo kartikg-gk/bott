@@ -72,7 +72,7 @@ export class BotApps {
   }
 
   /** Runs an app tool for the bot. What goes wrong comes back as a message the bot can read. */
-  async call(bot: Bot, tool: string, input: unknown): Promise<ToolOutput> {
+  async call(bot: Bot, tool: string, input: unknown, signal?: AbortSignal): Promise<ToolOutput> {
     const owner = toolOwner(tool, this.runner.apps);
     const spec = owner ? this.runner.apps[owner]?.tools.find((t) => t.name === tool) : undefined;
     if (!owner || !spec) return errorOutput("Unknown tool");
@@ -85,7 +85,9 @@ export class BotApps {
     const parsed = spec.input.safeParse(input);
     if (!parsed.success) return errorOutput(`Invalid arguments for ${tool}.`);
     try {
-      return say(await this.runner.run(tool, parsed.data as Record<string, unknown>, bot.name));
+      return say(
+        await this.runner.run(tool, parsed.data as Record<string, unknown>, bot.name, signal),
+      );
     } catch (error) {
       return errorOutput(failure(owner, error));
     }

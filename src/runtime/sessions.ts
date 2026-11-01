@@ -682,7 +682,7 @@ export class SessionManager {
           session?.addHostTools(loaded.tools);
           return loaded.output;
         }
-        if (apps?.owns(call.name)) return apps.call(bot, call.name, call.input);
+        if (apps?.owns(call.name)) return apps.call(bot, call.name, call.input, signal);
         return answerTeamCall(
           {
             store: this.store,

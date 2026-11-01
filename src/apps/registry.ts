@@ -79,15 +79,32 @@ export class AppRunner {
     return app.configured(this.env);
   }
 
-  /** Runs one tool. What the service said comes back as text marked as outside content. */
-  async run(tool: string, args: Record<string, unknown>, botName?: string): Promise<string> {
+  /**
+   * Runs one tool. What the service said comes back as text marked as outside content. Aborting
+   * `signal` cancels every request the tool still has in flight.
+   */
+  async run(
+    tool: string,
+    args: Record<string, unknown>,
+    botName?: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    signal?.throwIfAborted();
     const owner = toolOwner(tool, this.apps);
     const app = owner ? this.apps[owner] : undefined;
     if (!app) throw new AppError("Unknown tool");
     const { accessToken, recoverToken } = this.opts;
     let current: string | undefined;
+    const base = this.fetcher;
+    const fetcher: Fetch = signal
+      ? (input, init) =>
+          base(input, {
+            ...init,
+            signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+          })
+      : base;
     const ctx: AppContext = {
-      fetch: this.fetcher,
+      fetch: fetcher,
       env: this.env,
       accounts: this.accounts,
       botName,

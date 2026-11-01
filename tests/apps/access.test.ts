@@ -45,6 +45,25 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       "GET https://notes.test/notes_read/2": () => status(500),
     });
 
+  it("a stopped run stops the app's requests", async () => {
+    const seen: (AbortSignal | null | undefined)[] = [];
+    const watching = async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push(init?.signal);
+      return json({ ok: true });
+    };
+    const runner = new AppRunner({ apps: { notes }, env: { NOTES_KEY: "k" }, fetch: watching });
+    const { store, bot, apps } = await setup(runner);
+    await store.setPlugin(bot.id, "notes", true);
+    const stop = new AbortController();
+    await apps.call(bot, "notes_send", { id: "1" }, stop.signal);
+    expect(seen[0]?.aborted).toBe(false);
+    stop.abort();
+    expect(seen[0]?.aborted).toBe(true);
+    const late = await apps.call(bot, "notes_send", { id: "1" }, stop.signal);
+    expect(late.isError).toBe(true);
+    expect(seen).toHaveLength(1);
+  });
+
   it("a bot sees only apps granted to it and set up", async () => {
     const runner = new AppRunner({ apps: { notes }, env: {}, fetch: service() });
     const { store, bot, apps } = await setup(runner);
