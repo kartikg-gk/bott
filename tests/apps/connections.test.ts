@@ -166,6 +166,46 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     );
   });
 
+  it("keeps a connection another process renewed at the same moment", async () => {
+    let current = "1//r0";
+    let issued = 0;
+    const held: (() => void)[] = [];
+    const issue = () => {
+      issued += 1;
+      current = `1//r${issued}`;
+      return json({
+        access_token: `ya29-${issued}`,
+        refresh_token: current,
+        expires_in: 3600,
+        scope: GMAIL_SCOPE,
+      });
+    };
+    const { connections, caller, advance } = await setup({
+      [GOOGLE_TOKEN]: async (req) => {
+        if (req.form.get("grant_type") !== "refresh_token") return issue();
+        await new Promise<void>((resolve) => held.push(resolve));
+        // Google turns down a refresh token that has already been swapped for a new one.
+        if (req.form.get("refresh_token") !== current)
+          return status(400, { error: "invalid_grant" });
+        return issue();
+      },
+    });
+    const q = queryOf((await connections.connect(caller, "gmail")).url);
+    await connections.callback(caller, "gmail", { state: q.state, code: "c" });
+    // A second process: its own queues, the same saved tokens.
+    const other = new AppConnections({ ...connections.opts });
+
+    advance(3590);
+    const here = connections.token("acct", "gmail");
+    const there = other.token("acct", "gmail");
+    while (held.length < 2) await new Promise((resolve) => setTimeout(resolve, 1));
+    held[0]?.();
+    expect(await here).toBe("ya29-2");
+    held[1]?.();
+    expect(await there).toBe("ya29-2");
+    expect(await connections.connected("acct", "gmail")).toBe(true);
+  });
+
   it("an unreadable saved token asks for a new connection", async () => {
     const { connections, credentials } = await setup();
     const broken = {

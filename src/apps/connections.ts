@@ -459,12 +459,36 @@ export class AppConnections {
       try {
         const saved = await this.readSaved(account, name);
         if (!saved) throw new AppError(notConnected);
-        return (await this.renewIfDue(account, name, saved, rejected === saved.access)).access;
+        try {
+          return (await this.renewIfDue(account, name, saved, rejected === saved.access)).access;
+        } catch (error) {
+          const renewed = await this.renewedElsewhere(account, name, saved, error);
+          if (renewed) return renewed.access;
+          throw error;
+        }
       } catch (error) {
         if (error instanceof AuthorizationExpired) await this.dropExpired(account, name, error);
         throw error;
       }
     });
+  }
+
+  /**
+   * The token another process saved while this one was renewing, when the provider turned this
+   * renewal down because the other one had already used the refresh token. Queues only keep one
+   * process in order, so on a hosted deploy two renewals can start from the same saved token.
+   */
+  private async renewedElsewhere(
+    account: string,
+    name: string,
+    used: SavedToken,
+    error: unknown,
+  ): Promise<SavedToken | null> {
+    if (!(error instanceof AuthorizationExpired) || error instanceof ClientExpired) return null;
+    const now = await this.readSaved(account, name).catch(() => null);
+    if (!now || now.access === used.access || now.refresh === used.refresh) return null;
+    if (now.expires !== null && now.expires <= this.clock() + RENEW_MARGIN) return null;
+    return now;
   }
 
   private async dropExpired(account: string, name: string, error: AuthorizationExpired) {
