@@ -45,7 +45,7 @@ export class BotApps {
   loader(enabled: string[]): HostTool {
     return {
       name: LOAD_PLUGIN,
-      description: `Load tool schemas for a connected app. Available apps: ${enabled.join(", ")}`,
+      description: `Adds one app's tools to this conversation. Apps you can load: ${enabled.join(", ")}`,
       input: loadInput,
       readOnly: true,
     };
@@ -56,12 +56,12 @@ export class BotApps {
     const parsed = loadInput.safeParse(input);
     const name = parsed.success ? parsed.data.name : undefined;
     if (name === undefined || !(await this.enabled(botId)).includes(name)) {
-      return { output: errorOutput("This app is not connected or not granted to this bot"), tools: [] };
+      return { output: errorOutput("That app is not granted to this bot, or not connected yet"), tools: [] };
     }
     const app = this.runner.apps[name];
     const tools = (app?.tools ?? []).map(hostTool);
     const names = tools.map((t) => t.name).join(", ");
-    return { output: say(`Loaded ${name}. Available tools are ${names}.`), tools };
+    return { output: say(`${name} is ready. Its tools: ${names}.`), tools };
   }
 
   owns(tool: string): boolean {
@@ -74,7 +74,7 @@ export class BotApps {
     const spec = owner ? this.runner.apps[owner]?.tools.find((t) => t.name === tool) : undefined;
     if (!owner || !spec) return errorOutput("Unknown tool");
     if (!(await this.store.pluginsFor(bot.id)).includes(owner)) {
-      return errorOutput(`${owner} is not enabled for this bot.`);
+      return errorOutput(`This bot has no grant for ${owner}.`);
     }
     if (!(await this.runner.configured(owner))) {
       return errorOutput(`${owner} is not set up on the server.`);
@@ -94,7 +94,7 @@ export function failure(app: string, error: unknown): string {
   if (error instanceof AppError) return error.message;
   if (error instanceof HttpError) return `${app} returned HTTP ${error.status}.`;
   if (error instanceof NetworkError) {
-    return `Could not reach ${app}. A write may have gone through; do not retry it.`;
+    return `${app} did not answer. A change may already have been made, so do not repeat the call.`;
   }
   return `${app} could not complete the request.`;
 }

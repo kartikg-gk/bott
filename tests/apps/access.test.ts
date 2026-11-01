@@ -58,7 +58,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const loader = ready.loader(["notes"]);
     expect(loader.name).toBe(LOAD_PLUGIN);
     expect(loader.readOnly).toBe(true);
-    expect(loader.description).toContain("Available apps: notes");
+    expect(loader.description).toContain("Apps you can load: notes");
   });
 
   it("loading gives the full tools only for an enabled app", async () => {
@@ -73,7 +73,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(loaded.output.content).toEqual([
       {
         type: "text",
-        text: "Loaded notes. Available tools are notes_read, notes_write, notes_send.",
+        text: "notes is ready. Its tools: notes_read, notes_write, notes_send.",
       },
     ]);
     expect(loaded.tools.map((t) => [t.name, t.readOnly, t.review])).toEqual([
@@ -90,7 +90,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const { store, bot, apps } = await setup(runner);
     const before = await apps.call(bot, "notes_read", { id: "1" });
     expect(before).toEqual({
-      content: [{ type: "text", text: "notes is not enabled for this bot." }],
+      content: [{ type: "text", text: "This bot has no grant for notes." }],
       isError: true,
     });
     expect(fetcher.seen).toHaveLength(0);
@@ -115,7 +115,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     );
     expect((await away.call(bot, "notes_read", { id: "1" })).content[0]).toEqual({
       type: "text",
-      text: "Could not reach notes. A write may have gone through; do not retry it.",
+      text: "notes did not answer. A change may already have been made, so do not repeat the call.",
     });
   });
 
