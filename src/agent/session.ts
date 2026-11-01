@@ -7,6 +7,7 @@ import type { ModelProvider } from "./providers/types.ts";
 import type { SessionStore } from "./sessionStore.ts";
 import { memorySessionStore } from "./sessionStore.ts";
 import { loadSkillTool, type Skill } from "./skills.ts";
+import { thinkingFor } from "./thinking.ts";
 import { errorOutput, type ToolOutput, type ToolSpec } from "./tools.ts";
 import { type ModelEntry, type TranscriptEntry, textOf } from "./transcript.ts";
 
@@ -111,6 +112,8 @@ export interface SessionOptions {
    * Such a call asks the person whatever the policy, as a reviewed tool does.
    */
   steers?: (call: ToolCall) => boolean;
+  /** How hard the model thinks before answering: off, minimal, low, medium, high, xhigh or max. */
+  thinking?: string | null | undefined;
 }
 
 /** Why a call that needs approval is refused in an unattended run. */
@@ -411,6 +414,7 @@ export class AgentSession {
         },
         beforeModelRequest: (messages) => this.compactIfFull(messages, text),
         cacheKey: this.opts.id,
+        thinking: thinkingFor(this.opts.thinking),
       })) {
         if (event.type === "message_end") {
           this.transcript = [...this.transcript, event.message];

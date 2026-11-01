@@ -20,6 +20,7 @@ describe("reading the settings from the environment", () => {
     expect(config.idleSeconds).toBe(1800);
     expect(config.approvalSeconds).toBe(300);
     expect(config.retentionDays).toBe(7);
+    expect(config.thinking).toBeUndefined();
     expect(config.computer.executor).toBe("local");
     expect(config.limits.requestsPerRun).toBe(100);
     expect(config.memory.enabled).toBe(false);
@@ -55,6 +56,7 @@ describe("reading the settings from the environment", () => {
         BOTT_APPROVAL_SECONDS: "120",
         BOTT_WORKERS: "4",
         BOTT_RETENTION_DAYS: "30",
+        BOTT_THINKING: "medium",
         BOTT_EXECUTOR: "docker",
         BOTT_DOCKER_IMAGE: "busybox:1.36",
         BOTT_SANDBOX_NETWORK: "closed",
@@ -85,6 +87,7 @@ describe("reading the settings from the environment", () => {
       approvalSeconds: 120,
       workers: 4,
       retentionDays: 30,
+      thinking: "medium",
     });
     expect(config.computer).toMatchObject({
       executor: "docker",
@@ -120,6 +123,7 @@ describe("reading the settings from the environment", () => {
       [{ BOTT_PORT: "80a" }, /BOTT_PORT/],
       [{ BOTT_POLICY: "maybe" }, /BOTT_POLICY/],
       [{ BOTT_RETENTION_DAYS: "0" }, /BOTT_RETENTION_DAYS/],
+      [{ BOTT_THINKING: "deep" }, /BOTT_THINKING/],
       [{ BOTT_AUTH: "password" }, /BOTT_AUTH/],
       [{ BOTT_INSTANCE: "not-hex" }, /BOTT_INSTANCE/],
       [{ BOTT_PROVIDER: "elsewhere" }, /BOTT_PROVIDER/],

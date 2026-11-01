@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { StreamEvent } from "../../src/agent/providers/types.ts";
 import { AgentSession, type SessionEvent, type SessionOptions } from "../../src/agent/session.ts";
 import { jsonlSessionStore, memorySessionStore } from "../../src/agent/sessionStore.ts";
+import { THINKING_BUDGETS } from "../../src/agent/thinking.ts";
 import type { ToolSpec } from "../../src/agent/tools.ts";
 import {
   emptyUsage,
@@ -98,6 +99,19 @@ describe("AgentSession", () => {
     expect(ends.at(-1)).toMatchObject({ message: { role: "assistant" } });
     expect(seen.at(-1)).toMatchObject({ outcome: "completed", state: { isStreaming: false } });
     expect(provider.requests[0]?.system).toBe("sys");
+    expect(provider.requests[0]?.thinking).toBeUndefined();
+  });
+
+  it("asks the model to think with the budget its thinking level names", async () => {
+    const provider = fakeProvider([reply([text("a")]), reply([text("b")])]);
+    const deep = await open("s1t", provider, { thinking: "high" });
+    await deep.request("prompt", { message: "hi" });
+    await untilSettled(deep);
+    expect(provider.requests[0]?.thinking).toEqual({ budgetTokens: THINKING_BUDGETS.high });
+    const off = await open("s1u", provider, { thinking: "off" });
+    await off.request("prompt", { message: "hi" });
+    await untilSettled(off);
+    expect(provider.requests[1]?.thinking).toBeUndefined();
   });
 
   it("get_state reports model, busy flag and message count", async () => {

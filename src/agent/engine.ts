@@ -1,5 +1,5 @@
 import { mendHistory } from "./mending.ts";
-import type { ModelProvider } from "./providers/types.ts";
+import type { ModelProvider, Thinking } from "./providers/types.ts";
 import { errorOutput, findTool, type ToolOutput, type ToolSpec } from "./tools.ts";
 import {
   type Block,
@@ -59,6 +59,8 @@ export interface AgentLoopOptions {
   /** Called before every model request; a returned list replaces the working history. */
   beforeModelRequest?: (messages: TranscriptEntry[]) => Promise<TranscriptEntry[] | undefined>;
   cacheKey?: string;
+  /** How much the model may think before each answer; not at all when left out. */
+  thinking?: Thinking | undefined;
 }
 
 /** Runs model turns, executing tool calls between them, until the model stops. */
@@ -150,6 +152,7 @@ async function* streamReply(
       tools: opts.tools,
       signal: opts.signal,
       cacheKey: opts.cacheKey,
+      ...(opts.thinking ? { thinking: opts.thinking } : {}),
     })) {
       if (event.type === "text_delta" || event.type === "thinking_delta") {
         yield {

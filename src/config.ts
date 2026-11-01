@@ -12,6 +12,7 @@ import { TOKEN_VARIABLE } from "./accounts/localToken.ts";
 import { PROVIDERS } from "./accounts/models.ts";
 import { MASTER_KEY_VARIABLE } from "./accounts/sealing.ts";
 import type { Policy } from "./agent/policy.ts";
+import { THINKING_LEVELS } from "./agent/thinking.ts";
 import { type ComputerSettings, computerSettings } from "./computers/settings.ts";
 import { D1_VARIABLES } from "./db/database.ts";
 import { DEFAULT_LIMITS, type LimitsConfig } from "./limits/limits.ts";
@@ -53,6 +54,8 @@ export interface Config {
   workers: number | undefined;
   /** Days before finished message text, chat history and run records are dropped. */
   retentionDays: number;
+  /** How hard models think before answering when a conversation has not chosen. */
+  thinking: string | undefined;
   computer: ComputerSettings;
   limits: LimitsConfig;
   memory: MemoryConfig;
@@ -114,6 +117,10 @@ export const SETTINGS: Setting[] = [
   { name: "BOTT_IDLE_SECONDS", about: "Seconds before an idle session is closed", example: "1800" },
   { name: "BOTT_APPROVAL_SECONDS", about: "Seconds an approval waits", example: "300" },
   { name: "BOTT_WORKERS", about: "Most runs or jobs at once" },
+  {
+    name: "BOTT_THINKING",
+    about: "How hard models think before answering: off, minimal, low, medium, high, xhigh or max",
+  },
   {
     name: "BOTT_RETENTION_DAYS",
     about: "Days kept of finished message text, chat history and run records",
@@ -323,6 +330,7 @@ export function readConfig(env: Env = process.env, opts: ReadOptions = {}): Conf
     approvalSeconds: whole(env, "BOTT_APPROVAL_SECONDS", 1, 3600) ?? 300,
     workers: whole(env, "BOTT_WORKERS", 1, 256),
     retentionDays: whole(env, "BOTT_RETENTION_DAYS", 1, 3650) ?? 7,
+    thinking: choice(env, "BOTT_THINKING", THINKING_LEVELS),
     computer,
     limits,
     memory,

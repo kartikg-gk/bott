@@ -24,6 +24,8 @@ export interface AccountGatewaysOptions {
   model: string;
   idleSeconds: number;
   approvalSeconds?: number;
+  /** How hard models think when a conversation has not chosen; off when left out. */
+  thinking?: string | undefined;
   computer?: ComputerSettings;
   computers?: ComputerFactory;
   limits?: Partial<LimitsConfig>;
@@ -74,6 +76,7 @@ export class AccountGateways {
               ? {}
               : { approvalSeconds: opts.approvalSeconds }),
             ...(opts.computer ? { computer: opts.computer } : {}),
+            ...(opts.thinking ? { thinking: opts.thinking } : {}),
           },
           providers: runtime.providers,
           limits: runtime.limits,

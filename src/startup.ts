@@ -88,6 +88,7 @@ function runtime(config: Config): RuntimeConfig {
     idleSeconds: config.idleSeconds,
     approvalSeconds: config.approvalSeconds,
     computer: config.computer,
+    ...(config.thinking ? { thinking: config.thinking } : {}),
   };
 }
 
@@ -180,6 +181,7 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       model: config.model,
       idleSeconds: config.idleSeconds,
       approvalSeconds: config.approvalSeconds,
+      ...(config.thinking ? { thinking: config.thinking } : {}),
       computer: config.computer,
       limits: config.limits,
       ...(config.workers === undefined ? {} : { workers: config.workers }),

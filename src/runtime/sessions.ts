@@ -52,6 +52,8 @@ export interface RuntimeConfig {
   approvalSeconds?: number;
   /** Where bots' commands run; this machine when left out. */
   computer?: ComputerSettings;
+  /** How hard models think when a conversation has not chosen; off when left out. */
+  thinking?: string | undefined;
 }
 
 /** Makes the model provider a bot's session talks to. */
@@ -798,6 +800,7 @@ export class SessionManager {
         ? {}
         : { approvalSeconds: this.config.approvalSeconds }),
       ...(opts.unattended ? { unattended: true } : {}),
+      thinking: opts.route.thinking ?? this.config.thinking,
     });
     return new Live(session, bot.id, built.signature, sessionFile, this.now());
   }

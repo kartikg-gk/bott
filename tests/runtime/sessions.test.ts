@@ -7,6 +7,7 @@ import type {
   ProviderRequest,
   StreamEvent,
 } from "../../src/agent/providers/types.ts";
+import { THINKING_BUDGETS } from "../../src/agent/thinking.ts";
 import { emptyUsage, textOf } from "../../src/agent/transcript.ts";
 import { type Bot, botRoot } from "../../src/bots/bots.ts";
 import { rememberSession, savedSession } from "../../src/bots/profiles.ts";
@@ -348,6 +349,22 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     }
     expect(asked).toEqual(["Write"]);
     expect(existsSync(join(sessions.workspaceFor(chief).root, "tools", "SKILL.md"))).toBe(false);
+  });
+
+  it("a conversation's own thinking level wins over the server's", async () => {
+    const { store, config, manager } = await setup();
+    config.thinking = "low";
+    const { factory, requests } = scripted("one", "two");
+    const sessions = manager(factory);
+    const first = await store.conversation(1, 1);
+    await sessions.prompt(first, "hi");
+    const second = await store.conversation(2, 2);
+    await store.persistRoute(second, { thinking: "max" });
+    await sessions.prompt(second, "hi");
+    expect(requests.map((r) => r.req.thinking)).toEqual([
+      { budgetTokens: THINKING_BUDGETS.low },
+      { budgetTokens: THINKING_BUDGETS.max },
+    ]);
   });
 
   it("idle sessions are closed after idleSeconds", async () => {
