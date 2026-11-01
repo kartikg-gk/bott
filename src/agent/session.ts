@@ -91,9 +91,14 @@ export interface SessionOptions {
   contextWindow?: number;
   /** Seconds since the epoch, as a float; approval deadlines are measured by it. */
   clock?: () => number;
+  /** How long an approval waits for an answer before it is denied. */
+  approvalSeconds?: number;
 }
 
-const APPROVAL_SECONDS = 600;
+/** How long an approval waits for an answer when the session is not told otherwise. */
+export const APPROVAL_SECONDS = 300;
+/** The longest delay a timer takes, in milliseconds. */
+const MAX_TIMER = 2 ** 31 - 1;
 const wallClock = () => Date.now() / 1000;
 
 const userEntry = (text: string): TranscriptEntry => ({
@@ -387,17 +392,35 @@ export class AgentSession {
     this.saving = this.saving.then(() => this.store.append(this.opts.id, [entry]));
   }
 
+  /**
+   * Asks whoever reads the events whether the call may run. Nobody may be listening, so the
+   * session denies the call itself once its deadline passes by the session's clock.
+   */
   private askApproval(call: ToolCall, signal: AbortSignal): Promise<boolean> {
     const id = randomUUID();
+    const clock = this.opts.clock ?? wallClock;
+    const expiresAt = Math.floor(clock()) + (this.opts.approvalSeconds ?? APPROVAL_SECONDS);
     return new Promise<boolean>((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
       const settle = (allow: boolean) => {
         if (!this.approvals.delete(id)) return;
+        clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         this.emit({ type: "approval_resolved", id, approvalId: id, allow });
         resolve(allow);
       };
       const onAbort = () => settle(false);
-      this.approvals.set(id, settle);
+      // A longer delay would overflow the timer; one that fires early sets itself again.
+      const arm = () => {
+        const left = (expiresAt - clock()) * 1000;
+        timer = setTimeout(
+          () => (clock() < expiresAt ? arm() : settle(false)),
+          Math.min(MAX_TIMER, Math.max(0, left)),
+        );
+        timer.unref();
+      };
+      // An answer that comes after the deadline is a denial.
+      this.approvals.set(id, (allow) => settle(allow && clock() < expiresAt));
       const input = JSON.stringify(call.input) ?? "";
       this.emit({
         type: "approval_requested",
@@ -410,10 +433,13 @@ export class AgentSession {
           .update(`${call.name}
 ${input}`)
           .digest("hex"),
-        expiresAt: Math.floor((this.opts.clock ?? wallClock)()) + APPROVAL_SECONDS,
+        expiresAt,
       });
       if (signal.aborted) settle(false);
-      else signal.addEventListener("abort", onAbort);
+      else {
+        signal.addEventListener("abort", onAbort);
+        if (this.approvals.has(id)) arm();
+      }
     });
   }
 

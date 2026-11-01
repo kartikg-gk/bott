@@ -2,7 +2,7 @@ import type { SessionEvent } from "../agent/session.ts";
 import type { InboxItem, InboxStatus } from "../store/inbox.ts";
 import type { Route } from "../store/routes.ts";
 import { type Store, WEB_CHAT } from "../store/store.ts";
-import { BotBusy, type SessionManager } from "./sessions.ts";
+import { BotBusy, type EventSource, type Origin, type SessionManager } from "./sessions.ts";
 import type { ApprovalCard, Sink } from "./sink.ts";
 
 type ApprovalRequest = Extract<SessionEvent, { type: "approval_requested" }>;
@@ -80,7 +80,13 @@ interface Active {
 
 interface OpenCard {
   card: ApprovalCard;
-  active: Active;
+  /** The conversation the card is shown on and the person who may answer it. */
+  route: Route;
+  actor: number;
+  /** The session that asked; the answer goes back to it. */
+  asker: EventSource;
+  /** The run on the route the card belongs to; none for work that outlives the run. */
+  active: Active | undefined;
   deciding: boolean;
   timer: NodeJS.Timeout | undefined;
 }
@@ -89,6 +95,8 @@ interface OpenCard {
 export class Dispatcher {
   private readonly active = new Map<number, Active>();
   private readonly cards = new Map<string, OpenCard>();
+  /** Approval work for cards no run is waiting on. */
+  private readonly loose = new Set<Promise<void>>();
   private readonly workers: number;
   private ticking: Promise<unknown> = Promise.resolve();
 
@@ -101,6 +109,7 @@ export class Dispatcher {
     const workers = opts.workers ?? Number.POSITIVE_INFINITY;
     if (!(workers >= 1)) throw new Error("workers must be at least 1");
     this.workers = workers;
+    sessions.approvals = (origin, e, source) => this.relayed(origin, e, source);
   }
 
   /**
@@ -115,8 +124,9 @@ export class Dispatcher {
 
   /** Resolves once no run is in progress. */
   async idle(): Promise<void> {
-    while (this.active.size > 0) {
+    while (this.active.size > 0 || this.loose.size > 0) {
       await Promise.all([...this.active.values()].map((a) => a.done));
+      await Promise.allSettled([...this.loose]);
     }
   }
 
@@ -126,7 +136,7 @@ export class Dispatcher {
     return [...this.cards.values()]
       .filter(
         (open) =>
-          open.active.item.actor === actor &&
+          open.actor === actor &&
           !open.deciding &&
           (run === undefined || open.card.run === run) &&
           open.card.expiresAt > now,
@@ -141,7 +151,7 @@ export class Dispatcher {
    */
   async decide(approvalId: string, allow: boolean, actor: number): Promise<boolean> {
     const open = this.cards.get(approvalId);
-    if (!open || open.deciding || open.active.item.actor !== actor || open.active.stopped) {
+    if (!open || open.deciding || open.actor !== actor || open.active?.stopped) {
       return false;
     }
     open.deciding = true;
@@ -156,11 +166,18 @@ export class Dispatcher {
     const cleared = await this.store.clearRouteQueue(route);
     const active = this.active.get(route.id);
     if (active) active.stopped = true;
-    const closing = [...this.cards].filter(([, open]) => open.active.route.id === route.id);
-    // The session denies these as it aborts; the record should say the stop did it.
+    // Cards of the stopped run, its delegations' among them. Background agents carry on.
+    const closing = [...this.cards].filter(
+      ([, open]) => open.active !== undefined && open.active === active,
+    );
+    // The sessions deny these as they abort; the record should say the stop did it.
     for (const [, open] of closing) open.deciding = true;
     await this.sessions.abort(route).catch(() => {});
-    for (const [id] of closing) await this.resolve(id, false, "stopped");
+    for (const [id, open] of closing) {
+      // A session that is not stopping with the run is told no directly.
+      await this.respond(open, false);
+      await this.resolve(id, false, "stopped");
+    }
     if (active) await active.done;
     return { stopped: active !== undefined, cleared };
   }
@@ -254,7 +271,7 @@ export class Dispatcher {
         return;
       }
       const answer = await this.sessions.prompt(route, item.text, {
-        onEvent: (e) => this.observe(active, e),
+        onEvent: (e, source) => this.observe(active, e, source),
       });
       await this.settleChores(active);
       await this.store.mark(item, "delivering");
@@ -280,7 +297,10 @@ export class Dispatcher {
     } finally {
       await this.settleChores(active);
       for (const [id, open] of this.cards) {
-        if (open.active === active) await this.resolve(id, false, "run_closed");
+        if (open.active !== active) continue;
+        // A delegated session may still be waiting on it.
+        await this.respond(open, false);
+        await this.resolve(id, false, "run_closed");
       }
     }
   }
@@ -290,41 +310,71 @@ export class Dispatcher {
   }
 
   /** Passes a session event on and acts on approval requests and answers. */
-  private observe(active: Active, e: SessionEvent): void {
+  private observe(active: Active, e: SessionEvent, source: EventSource): void {
     if (!active.started) {
       active.started = true;
       // A stop that came before the prompt reached the session could not abort it then.
       if (active.stopped) this.chore(active, this.sessions.abort(active.route));
     }
+    const origin = { route: active.route, actor: active.item.actor };
+    this.approvalEvent(origin, active, e, source);
+  }
+
+  /**
+   * Takes an approval event from work a conversation started, such as a delegation or a
+   * background agent. While the conversation's run is going, the card joins that run.
+   */
+  private relayed(origin: Origin, e: SessionEvent, source: EventSource): void {
+    const active = this.active.get(origin.route.id);
+    const joined = active && !active.stopped ? active : undefined;
+    const from = joined ? { route: joined.route, actor: joined.item.actor } : origin;
+    this.approvalEvent(from, joined, e, source);
+  }
+
+  private approvalEvent(
+    origin: Origin,
+    active: Active | undefined,
+    e: SessionEvent,
+    source: EventSource,
+  ): void {
     try {
-      this.sink.event(active.route, e);
+      this.sink.event(origin.route, e);
     } catch {
       // A failing page must not stop the run.
     }
     if (e.type === "approval_requested") {
-      this.chore(active, this.ask(active, e));
+      this.chore(active, this.ask(origin, active, source, e));
     } else if (e.type === "approval_resolved") {
       const open = this.cards.get(e.approvalId);
-      if (open && !open.deciding) this.chore(active, this.resolve(e.approvalId, e.allow, "worker"));
+      if (open && !open.deciding) {
+        this.chore(open.active, this.resolve(e.approvalId, e.allow, "worker"));
+      }
     }
   }
 
-  private chore(active: Active, work: Promise<unknown>): void {
+  /** Tracks approval work, with the run when there is one so it settles before the run closes. */
+  private chore(active: Active | undefined, work: Promise<unknown>): void {
     const tracked = work.then(
       () => {},
       () => {},
     );
-    active.chores.add(tracked);
-    void tracked.finally(() => active.chores.delete(tracked));
+    const set = active ? active.chores : this.loose;
+    set.add(tracked);
+    void tracked.finally(() => set.delete(tracked));
   }
 
   /** Records an approval request and shows it; one that cannot be shown is denied. */
-  private async ask(active: Active, e: ApprovalRequest): Promise<void> {
-    const { item, route } = active;
+  private async ask(
+    origin: Origin,
+    active: Active | undefined,
+    asker: EventSource,
+    e: ApprovalRequest,
+  ): Promise<void> {
+    const { route, actor } = origin;
     await this.store.addApproval({
       id: e.approvalId,
       chat: route.chat,
-      user: item.actor,
+      user: actor,
       thread: route.thread,
       run: SESSION_RUN,
       tool: e.tool,
@@ -337,10 +387,18 @@ export class Dispatcher {
       preview: e.preview,
       digest: e.digest,
       expiresAt: e.expiresAt,
-      run: item.run,
-      bot: route.bot ?? (await this.store.chief()).id,
+      run: active?.item.run ?? null,
+      bot: asker.bot,
     };
-    const open: OpenCard = { card, active, deciding: false, timer: undefined };
+    const open: OpenCard = {
+      card,
+      route,
+      actor,
+      asker,
+      active,
+      deciding: false,
+      timer: undefined,
+    };
     this.cards.set(card.id, open);
     this.arm(open);
     try {
@@ -376,11 +434,10 @@ export class Dispatcher {
     await this.resolve(id, false, "expired");
   }
 
-  /** Gives the session the answer; false when it could not take it. */
+  /** Gives the session that asked the answer; false when it could not take it. */
   private async respond(open: OpenCard, allow: boolean): Promise<boolean> {
     try {
-      const session = await this.sessions.sessionFor(open.active.route);
-      const reply = await session.request("respond_to_approval", {
+      const reply = await open.asker.session.request("respond_to_approval", {
         approvalId: open.card.id,
         allow,
       });

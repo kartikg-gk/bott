@@ -6,7 +6,7 @@ import type { Bot } from "../bots/bots.ts";
 import { parseWhen } from "../schedule/when.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
-import { BotBusy, RunFailed, type SessionManager } from "./sessions.ts";
+import { BotBusy, type EventObserver, RunFailed, type SessionManager } from "./sessions.ts";
 
 /** The longest answer handed back to the chief from one delegation. */
 export const MAX_ANSWER = 20000;
@@ -169,6 +169,8 @@ export interface TeamContext {
   agents?: Agents | undefined;
   /** The bot whose session made the call; the chief when not given. */
   bot?: Bot | undefined;
+  /** Takes the events of a delegated run, so its approvals reach the person. */
+  onEvent?: EventObserver | undefined;
 }
 
 const JOB_TOOLS = new Set(["schedule_job", "list_scheduled_jobs", "cancel_scheduled_job"]);
@@ -213,7 +215,7 @@ async function delegate(ctx: TeamContext, botName: string, task: string): Promis
   let status: "completed" | "failed" | "cancelled" | "interrupted" = "interrupted";
   let answer = "";
   try {
-    answer = await sessions.delegate(route, target, task);
+    answer = await sessions.delegate(route, target, task, { onEvent: ctx.onEvent });
     status = "completed";
   } catch (error) {
     if (error instanceof RunFailed) {

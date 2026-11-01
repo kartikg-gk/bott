@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelProvider, StreamEvent } from "../src/agent/providers/types.ts";
 import { emptyUsage } from "../src/agent/transcript.ts";
+import type { Bot } from "../src/bots/bots.ts";
 import type { Database } from "../src/db/database.ts";
 import { Lease } from "../src/db/leases.ts";
 import { runRunner } from "../src/runner.ts";
@@ -19,6 +20,8 @@ const HOUR = 3600;
 const HANG = "\u0000hang";
 /** A scripted reply that fails the model call. */
 const FAIL = "\u0000fail";
+/** A scripted reply that asks to write a file. */
+const WRITE = "\u0000write";
 const POLL = 0.005;
 
 function reply(text: string): StreamEvent[] {
@@ -59,7 +62,12 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   });
 
   /** A store and session manager on `db` whose clock reads `clock`. */
-  async function side(db: Database, clock: () => number, texts: string[]) {
+  async function side(
+    db: Database,
+    clock: () => number,
+    texts: string[],
+    settings: Partial<RuntimeConfig> = {},
+  ) {
     const store = await Store.open(db, "main", { clock });
     const root = mkdtempSync(join(tmpdir(), "runner-"));
     folders.push(root);
@@ -70,6 +78,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       policy: "auto",
       model: "m",
       idleSeconds: 60,
+      ...settings,
     };
     const prompts: string[] = [];
     let started: () => void = () => {};
@@ -90,6 +99,22 @@ describe.each(backends)("%s backend", (kind: Backend) => {
           yield { type: "error", message: "aborted" };
           return;
         }
+        if (next === WRITE) {
+          yield { type: "start", model: "m" };
+          yield {
+            type: "end",
+            entry: {
+              role: "assistant",
+              content: [
+                { type: "call", id: "c1", name: "Write", input: { path: "a.txt", content: "x" } },
+              ],
+              model: "m",
+              usage: emptyUsage(),
+              stop: "end",
+            },
+          };
+          return;
+        }
         yield* reply(next);
       },
     });
@@ -103,11 +128,11 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     return { store, sessions, sink, prompts, hung };
   }
 
-  async function setup(texts: string[] = []) {
+  async function setup(texts: string[] = [], settings: Partial<RuntimeConfig> = {}) {
     const { db } = database(kind);
     open.push(db);
     let now = NOW;
-    const parts = await side(db, () => now, texts);
+    const parts = await side(db, () => now, texts, settings);
     const chief = await parts.store.chief();
     const addJob = (over: Partial<Parameters<Store["addJob"]>[0]> = {}) =>
       parts.store.addJob({
@@ -249,6 +274,26 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(after?.lastAnswer).toContain("the model is down");
     expect(sink.texts()).toHaveLength(1);
     expect(sink.texts()[0]).toMatch(new RegExp(`^Job #${id} \\(${chief.name}\\), failed:\\n`));
+  });
+
+  it("an unanswered approval in a job run is denied by its deadline", async () => {
+    const { store, sessions, sink, chief, addJob, once, clock } = await setup(
+      [WRITE, "could not write"],
+      { policy: "ask", approvalSeconds: 1 },
+    );
+    const id = await addJob({ spec: "once" });
+    // Nobody is there to answer while the clock moves on.
+    const ticking = setInterval(() => clock.set(clock.get() + 1), 50);
+    try {
+      await once();
+    } finally {
+      clearInterval(ticking);
+    }
+    const bot = (await store.bot(chief.id)) as Bot;
+    expect(existsSync(join(sessions.workspaceFor(bot).root, "a.txt"))).toBe(false);
+    expect(await store.job(id)).toMatchObject({ running: false, lastStatus: "completed" });
+    expect(sink.texts()).toEqual([`Job #${id} (${chief.name}), completed:\ncould not write`]);
+    expect(sessions.isBusy(chief.id)).toBe(false);
   });
 
   it("a job whose conversation cannot be read finishes failed instead of staying claimed", async () => {

@@ -195,6 +195,7 @@ export class BackgroundAgents implements Agents {
         policy: writer ? "auto" : "deny",
         readOnly: !writer,
         signal: running.controller.signal,
+        onEvent: this.sessions.relayApprovals(route, request.actor),
       });
       answer = result.text;
       status = result.outcome === "completed" ? "completed" : this.stopped(running, timedOut);

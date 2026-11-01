@@ -255,6 +255,50 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await sessions.prompt(route, "more")).toEqual({ text: "again", outcome: "completed" });
   });
 
+  it("the bot lock is released after an approval expires", async () => {
+    const { store, config, manager } = await setup();
+    config.policy = "ask";
+    config.approvalSeconds = 1;
+    const writer = await store.createBot({ name: "Writer", role: "Drafts text" });
+    const write: StreamEvent[] = [
+      { type: "start", model: "m" },
+      {
+        type: "end",
+        entry: {
+          role: "assistant",
+          content: [
+            { type: "call", id: "c1", name: "Write", input: { path: "a.txt", content: "x" } },
+          ],
+          model: "m",
+          usage: emptyUsage(),
+          stop: "end",
+        },
+      },
+    ];
+    const turns = [write, reply("could not write"), reply("second task done")];
+    const sessions = manager(() => ({
+      id: "fake",
+      async *stream() {
+        const next = turns.shift();
+        if (!next) throw new Error("no scripted reply left");
+        yield* next;
+      },
+    }));
+    const route = await store.conversation(1, 1);
+    // Nobody answers the approval while the store clock moves on.
+    const ticking = setInterval(() => {
+      now += 1;
+    }, 50);
+    try {
+      expect(await sessions.delegate(route, writer, "write a note")).toBe("could not write");
+    } finally {
+      clearInterval(ticking);
+    }
+    expect(existsSync(join(sessions.workspaceFor(writer).root, "a.txt"))).toBe(false);
+    expect(sessions.isBusy(writer.id)).toBe(false);
+    expect(await sessions.delegate(route, writer, "something else")).toBe("second task done");
+  });
+
   it("idle sessions are closed after idleSeconds", async () => {
     const { store, manager } = await setup(true);
     const { factory, requests } = scripted("noted", "still here");

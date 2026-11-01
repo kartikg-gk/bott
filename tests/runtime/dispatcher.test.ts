@@ -15,7 +15,6 @@ import { type Backend, backends, database } from "../support/fakeD1.ts";
 import { type FakeProvider, fakeProvider } from "../support/fakeProvider.ts";
 import { MemorySink } from "../support/memorySink.ts";
 
-
 function reply(text: string): StreamEvent[] {
   return [
     { type: "start", model: "m" },
@@ -260,9 +259,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await store.admitWeb(WEB_CHAT, 7, "first");
     expect(await dispatcher.tick()).toBe(1);
     const inTime = await sink.nextCard();
-    expect(inTime.expiresAt).toBe(now + 600);
+    expect(inTime.expiresAt).toBe(now + 300);
     expect(dispatcher.approvals(7)).toEqual([inTime]);
-    now += 599;
+    now += 299;
     expect(await dispatcher.decide(inTime.id, true, 7)).toBe(true);
     await dispatcher.idle();
     expect(readFileSync(join(root, "first.txt"), "utf8")).toBe("one");
@@ -270,8 +269,8 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const late = await store.admitWeb(WEB_CHAT, 7, "second");
     expect(await dispatcher.tick()).toBe(1);
     const card = await sink.nextCard();
-    expect(card.expiresAt).toBe(now + 600);
-    now += 601;
+    expect(card.expiresAt).toBe(now + 300);
+    now += 301;
     expect(dispatcher.approvals(7)).toEqual([]);
     expect(await dispatcher.decide(card.id, true, 7)).toBe(true);
     await dispatcher.idle();
@@ -360,6 +359,41 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       await db.query("SELECT decision,source FROM approvals WHERE id=?", [card.id])
     )[0];
     expect(decided).toMatchObject({ decision: "allowed", source: "user" });
+    expect(dispatcher.approvals(7)).toEqual([]);
+  });
+
+  it("a delegated run's approval appears on the chief's route and the decision reaches it", async () => {
+    const provider = gated([
+      toolCall("delegate_task", { bot_name: "Writer", task: "write the note" }),
+      toolCall("Write", { path: "note.txt", content: "from the writer" }),
+      reply("written"),
+      reply("the writer wrote it"),
+    ]);
+    const { db, store, sessions, sink, dispatcher, status } = await setup(provider, {
+      policy: "ask",
+    });
+    const writer = await store.createBot({ name: "Writer", role: "Drafts text" });
+    const file = join(sessions.workspaceFor(writer).root, "note.txt");
+    const item = await store.admitWeb(WEB_CHAT, 7, "have the writer write it", { run: "run-1" });
+
+    expect(await dispatcher.tick()).toBe(1);
+    const card = await sink.nextCard();
+    expect(card).toMatchObject({ tool: "Write", bot: writer.id, run: "run-1" });
+    expect(sink.cards[0]?.route).toMatchObject({ chat: WEB_CHAT, user: 7 });
+    expect(dispatcher.approvals(7)).toEqual([card]);
+    expect(existsSync(file)).toBe(false);
+    expect(await dispatcher.decide(card.id, true, 7)).toBe(true);
+    await dispatcher.idle();
+
+    expect(readFileSync(file, "utf8")).toBe("from the writer");
+    expect(sink.texts()).toEqual(["the writer wrote it"]);
+    expect(await status(item.id)).toBe("completed");
+    const decided = (
+      await db.query("SELECT user,decision,source FROM approvals WHERE id=?", [card.id])
+    )[0];
+    expect(decided).toMatchObject({ user: 7, decision: "allowed", source: "user" });
+    const delegations = await db.query("SELECT bot,status,answer FROM delegations");
+    expect(delegations).toEqual([{ bot: writer.id, status: "completed", answer: "written" }]);
     expect(dispatcher.approvals(7)).toEqual([]);
   });
 
@@ -473,7 +507,10 @@ describe.each(backends)("%s backend", (kind: Backend) => {
 
     expect(await dispatcher.reportInterrupted()).toBe(1);
     expect(sink.sent).toMatchObject([
-      { route: { chat: WEB_CHAT, user: 7 }, text: `Task #${web} was interrupted and not replayed.` },
+      {
+        route: { chat: WEB_CHAT, user: 7 },
+        text: `Task #${web} was interrupted and not replayed.`,
+      },
     ]);
     const rows = await db.query("SELECT reported FROM tasks WHERE id=?", [elsewhere]);
     expect(rows).toEqual([{ reported: 0 }]);

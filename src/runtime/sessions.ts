@@ -41,14 +41,33 @@ export interface RuntimeConfig {
   policy: Policy;
   model: string;
   idleSeconds: number;
+  /** How long an approval waits for an answer before it is denied; 300 when not given. */
+  approvalSeconds?: number;
 }
 
 /** Makes the model provider a bot's session talks to. */
 export type ProviderFactory = (bot: Bot, profile: Profile) => ModelProvider;
 
-export interface PromptOptions {
-  onEvent?: (event: SessionEvent) => void;
+/** The session an event came from and the bot it runs, so an answer can reach it. */
+export interface EventSource {
+  session: AgentSession;
+  bot: string;
 }
+
+export type EventObserver = (event: SessionEvent, source: EventSource) => void;
+
+export interface PromptOptions {
+  onEvent?: EventObserver | undefined;
+}
+
+/** Who started a piece of work: the conversation it belongs to and the person who asked. */
+export interface Origin {
+  route: Route;
+  actor: number;
+}
+
+/** Takes the approval events of work started from a conversation, such as a delegation. */
+export type ApprovalRelay = (origin: Origin, event: SessionEvent, source: EventSource) => void;
 
 export interface Answer {
   text: string;
@@ -158,6 +177,8 @@ export class SessionManager {
   private readonly timer: NodeJS.Timeout;
   /** Background work the chief's cancel_task can stop; set by whatever runs it. */
   agents: Agents | undefined;
+  /** Where approvals asked by delegations and background agents go; set by whatever shows them. */
+  approvals: ApprovalRelay | undefined;
 
   constructor(
     private readonly config: RuntimeConfig,
@@ -381,6 +402,17 @@ export class SessionManager {
     }
   }
 
+  /**
+   * An observer that hands a run's approval events to `approvals` on behalf of the conversation
+   * that started the run. Without a relay nobody answers them and their deadline denies them.
+   */
+  relayApprovals(route: Route, actor: number): EventObserver {
+    return (event, source) => {
+      if (event.type !== "approval_requested" && event.type !== "approval_resolved") return;
+      this.approvals?.({ route, actor }, event, source);
+    };
+  }
+
   /** How many transcripts are held in memory, for conversations without session files. */
   transcriptsInMemory(): number {
     return this.memory.size();
@@ -584,7 +616,15 @@ export class SessionManager {
       hostTools: bot.chief ? [...teamTools(), ...jobTools()] : jobTools(),
       answerHostTool: (call: HostToolCall) =>
         answerTeamCall(
-          { store: this.store, sessions: this, route, actor: route.user, agents: this.agents, bot },
+          {
+            store: this.store,
+            sessions: this,
+            route,
+            actor: route.user,
+            agents: this.agents,
+            bot,
+            onEvent: this.relayApprovals(route, route.user),
+          },
           call,
         ),
     };
@@ -600,6 +640,9 @@ export class SessionManager {
       policy: opts.policy ?? this.config.policy,
       store: this.storeFor(sessionFile),
       clock: () => this.now(),
+      ...(this.config.approvalSeconds === undefined
+        ? {}
+        : { approvalSeconds: this.config.approvalSeconds }),
     });
     return new Live(session, bot.id, built.signature, sessionFile, this.now());
   }
@@ -621,17 +664,14 @@ export class SessionManager {
   }
 
   /** Sends one prompt and waits for it to settle, passing each event on. */
-  private async run(
-    live: Live,
-    text: string,
-    onEvent?: (event: SessionEvent) => void,
-  ): Promise<Answer> {
+  private async run(live: Live, text: string, onEvent?: EventObserver): Promise<Answer> {
+    const source: EventSource = { session: live.session, bot: live.botId };
     const settled = new Promise<Answer>((resolve) => {
       let final = "";
       live.listener = (event) => {
         if (event.type === "response") return;
         try {
-          onEvent?.(event);
+          onEvent?.(event, source);
         } catch {
           // A failing observer must not stop the run.
         }
