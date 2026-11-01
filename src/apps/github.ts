@@ -219,7 +219,12 @@ async function run(ctx: AppContext, name: string, a: Record<string, unknown>): P
       return limited(`${issue.title} (${issue.state})\n${issue.body ?? ""}`);
     }
     case "github_read_file": {
-      const path = String(a.path).split("/").map(encodeURIComponent).join("/");
+      // A dot segment would be resolved by the URL and could leave the repository's contents.
+      const parts = String(a.path).split("/");
+      if (parts.some((part) => part === "." || part === "..")) {
+        throw new AppError("Use a file path inside the repository");
+      }
+      const path = parts.map(encodeURIComponent).join("/");
       const reply = await send(ctx.fetch, "GET", `${base}/contents/${path}`, {
         headers: { ...headers, accept: "application/vnd.github.raw+json" },
         params: a.ref ? { ref: String(a.ref) } : undefined,

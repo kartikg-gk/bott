@@ -136,6 +136,16 @@ describe("github", () => {
     expect(fetcher.seen.at(-1)?.json).toEqual({ title: "t", head: "f", base: "main", draft: true });
   });
 
+  it("refuses file paths with dot segments", async () => {
+    const { fetcher, apps } = runner({});
+    for (const path of ["../../user", "docs/../../../user", "./a"]) {
+      await expect(apps.run("github_read_file", { repo: "o/r", path })).rejects.toThrow(
+        "Use a file path inside the repository",
+      );
+    }
+    expect(fetcher.seen).toHaveLength(0);
+  });
+
   it("refuses repository names that could leave the repository path", async () => {
     const { fetcher, apps } = runner({});
     for (const repo of ["o", "o/r/x", "../r", "o/..", "o/r?x"]) {
