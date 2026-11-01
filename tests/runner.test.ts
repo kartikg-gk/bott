@@ -247,6 +247,34 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(prompts).toHaveLength(1);
   });
 
+  it("drops messages older than the retention period when it looks for work", async () => {
+    const { db, store, sessions, sink, clock } = await setup();
+    const route = await store.conversation(1, 1);
+    clock.set(NOW - 10 * 24 * HOUR);
+    await store.logMessage(route, "old", "in");
+    clock.set(NOW);
+    await store.logMessage(route, "new", "in");
+    const texts = async () =>
+      (await db.query("SELECT text FROM messages ORDER BY created")).map((row) => row.text);
+    const run = (retentionDays?: number) =>
+      runRunner({
+        store,
+        sessions,
+        sink,
+        instance: "main",
+        once: true,
+        poll: POLL,
+        owner: "runner-a",
+        ...(retentionDays === undefined ? {} : { retentionDays }),
+      });
+    await run();
+    expect(await texts()).toEqual(["old", "new"]);
+    await run(30);
+    expect(await texts()).toEqual(["old", "new"]);
+    await run(7);
+    expect(await texts()).toEqual(["new"]);
+  });
+
   it("runs no more jobs at once than its workers allow", async () => {
     const { store, addJob, prompts, sessions, sink } = await setup(["one", "two"]);
     const other = await store.createBot({ name: "Ada", role: "helper" });

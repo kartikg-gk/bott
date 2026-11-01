@@ -158,6 +158,7 @@ async function runner(io: Io, config: Config, args: string[]): Promise<number> {
       targets,
       once: values.once ?? false,
       ...(config.workers === undefined ? {} : { workers: config.workers }),
+      retentionDays: config.retentionDays,
       ...(io.signal ? { signal: io.signal } : {}),
     });
   } finally {

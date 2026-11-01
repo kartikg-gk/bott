@@ -51,6 +51,8 @@ export interface Config {
   idleSeconds: number;
   approvalSeconds: number;
   workers: number | undefined;
+  /** Days before finished message text, chat history and run records are dropped. */
+  retentionDays: number;
   computer: ComputerSettings;
   limits: LimitsConfig;
   memory: MemoryConfig;
@@ -112,6 +114,11 @@ export const SETTINGS: Setting[] = [
   { name: "BOTT_IDLE_SECONDS", about: "Seconds before an idle session is closed", example: "1800" },
   { name: "BOTT_APPROVAL_SECONDS", about: "Seconds an approval waits", example: "300" },
   { name: "BOTT_WORKERS", about: "Most runs or jobs at once" },
+  {
+    name: "BOTT_RETENTION_DAYS",
+    about: "Days kept of finished message text, chat history and run records",
+    example: "7",
+  },
   { name: "BOTT_EXECUTOR", about: "local, docker or daytona: where bots run commands" },
   { name: "BOTT_DOCKER_IMAGE", about: "Image for bot containers" },
   { name: "BOTT_DOCKER_MEMORY", about: "Memory cap for bot containers", example: "2g" },
@@ -315,6 +322,7 @@ export function readConfig(env: Env = process.env, opts: ReadOptions = {}): Conf
     idleSeconds: whole(env, "BOTT_IDLE_SECONDS", 1, 86_400 * 7) ?? 1800,
     approvalSeconds: whole(env, "BOTT_APPROVAL_SECONDS", 1, 3600) ?? 300,
     workers: whole(env, "BOTT_WORKERS", 1, 256),
+    retentionDays: whole(env, "BOTT_RETENTION_DAYS", 1, 3650) ?? 7,
     computer,
     limits,
     memory,

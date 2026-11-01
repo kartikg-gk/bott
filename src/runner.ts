@@ -19,6 +19,8 @@ import type { DelegationStatus } from "./store/work.ts";
 const RUNNER_SECONDS = 60;
 /** How often the runner looks for due work, in seconds. */
 const POLL_SECONDS = 2;
+/** How often old records are dropped, in seconds. */
+const TIDY_SECONDS = 3600;
 
 const REFUSED = "Another runner holds this instance; stop it or wait for its hold to run out";
 const TAKEN_OVER = "Another runner took this instance over after this one's hold ran out";
@@ -43,6 +45,8 @@ export interface RunnerOptions {
   signal?: AbortSignal;
   /** Runs each job's model work, as the instance's per-run spend and request limits need. */
   wrap?: <T>(work: () => Promise<T>) => Promise<T>;
+  /** Days kept of finished message text, chat history and run records; kept forever when unset. */
+  retentionDays?: number;
 }
 
 /** Why a run was stopped before it ended by itself. */
@@ -83,7 +87,8 @@ export async function runRunner(opts: RunnerOptions): Promise<void> {
 /** One instance a runner can cover: its store, sessions and where answers go. */
 export type RunnerTarget = Pick<RunnerOptions, "store" | "sessions" | "sink" | "instance" | "wrap">;
 
-export interface RunnersOptions extends Pick<RunnerOptions, "once" | "poll" | "ttl" | "workers"> {
+export interface RunnersOptions
+  extends Pick<RunnerOptions, "once" | "poll" | "ttl" | "workers" | "retentionDays"> {
   /** The instances that should be covered now; asked again every `refresh` seconds. */
   targets: () => Promise<RunnerTarget[]>;
   /** Seconds between looks at which instances to cover. */
@@ -116,7 +121,13 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * once. If any runner fails, all of them stop and the failure is thrown.
  */
 export async function runRunners(opts: RunnersOptions): Promise<void> {
-  const shared = { once: opts.once, poll: opts.poll, ttl: opts.ttl, workers: opts.workers };
+  const shared = {
+    once: opts.once,
+    poll: opts.poll,
+    ttl: opts.ttl,
+    workers: opts.workers,
+    retentionDays: opts.retentionDays,
+  };
   const settings = Object.fromEntries(
     Object.entries(shared).filter(([, value]) => value !== undefined),
   ) as Partial<RunnerOptions>;
@@ -189,6 +200,8 @@ class Runner {
   private readonly pollMs: number;
   private readonly active = new Map<number, Running>();
   private lost = false;
+  /** When old records were last dropped, by the store clock. */
+  private tidied = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly opts: RunnerOptions) {
     this.store = opts.store;
@@ -220,6 +233,7 @@ class Runner {
   /** Renews both holds, stops cancelled runs, then claims and starts what is due. */
   async tick(): Promise<void> {
     await this.watch();
+    await this.tidy();
     const room = (this.opts.workers ?? Number.POSITIVE_INFINITY) - this.active.size;
     if (room <= 0) return;
     const now = this.store.ctx.clock();
@@ -235,6 +249,19 @@ class Runner {
       ...(Number.isFinite(room) ? { limit: room } : {}),
     });
     for (const job of due) this.launch(job);
+  }
+
+  /** Drops what is past the retention period, at most once an hour. */
+  private async tidy(): Promise<void> {
+    const days = this.opts.retentionDays;
+    const now = this.store.ctx.clock();
+    if (!days || now - this.tidied < TIDY_SECONDS) return;
+    this.tidied = now;
+    try {
+      await this.store.retain(days);
+    } catch (error) {
+      console.warn("Old records could not be dropped:", error);
+    }
   }
 
   /** Waits for every running job, still renewing the holds and watching for cancellations. */
