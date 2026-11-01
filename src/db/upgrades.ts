@@ -15,6 +15,19 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** Scheduled jobs, and the lookup that finds the ones due. */
+const scheduledJobs: Upgrade = {
+  reaches: 7,
+  statements: () => [
+    "CREATE TABLE jobs(id INTEGER PRIMARY KEY AUTOINCREMENT,instance TEXT NOT NULL," +
+      "chat INTEGER NOT NULL,user INTEGER NOT NULL,actor INTEGER NOT NULL," +
+      "thread INTEGER NOT NULL,bot TEXT NOT NULL,task TEXT NOT NULL,spec TEXT NOT NULL," +
+      "next_run REAL,missed TEXT NOT NULL DEFAULT 'run',status TEXT NOT NULL DEFAULT 'active'," +
+      "running INTEGER NOT NULL DEFAULT 0,last_status TEXT,last_run REAL,created REAL NOT NULL)",
+    "CREATE INDEX jobs_due ON jobs(instance,status,next_run)",
+  ],
+};
+
 /** The apps each bot has been granted. */
 const appGrants: Upgrade = {
   reaches: 8,
@@ -192,6 +205,7 @@ const runContext: Upgrade = {
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
 export const UPGRADES: readonly Upgrade[] = [
+  scheduledJobs,
   appGrants,
   backgroundTasks,
   memoryFacts,
