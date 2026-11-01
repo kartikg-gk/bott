@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { SANDBOX_MEMORY, SANDBOX_ROOT } from "../../src/computers/daytona.ts";
 import { CONTAINER_ROOT, MEMORY_MOUNT } from "../../src/computers/docker.ts";
 import { makeComputer } from "../../src/computers/index.ts";
-import { computerName, computerSettings } from "../../src/computers/settings.ts";
+import { computerName, computerSettings, DEFAULT_IMAGE } from "../../src/computers/settings.ts";
 
 describe("computer settings", () => {
   it("default to this machine", () => {
     expect(computerSettings({})).toEqual({
       executor: "local",
-      dockerImage: null,
+      dockerImage: "debian:bookworm-slim",
       dockerMemory: "2g",
       daytonaTarget: null,
       daytonaSnapshot: null,
@@ -20,19 +20,19 @@ describe("computer settings", () => {
   it("read the saved config keys", () => {
     const settings = computerSettings({
       executor: "docker",
-      dockerImage: "debian:bookworm-slim",
+      dockerImage: "alpine:3.20",
       dockerMemory: "1g",
       unrelated: true,
     });
     expect(settings.executor).toBe("docker");
-    expect(settings.dockerImage).toBe("debian:bookworm-slim");
+    expect(settings.dockerImage).toBe("alpine:3.20");
+    expect(computerSettings({ executor: "docker", dockerImage: null }).dockerImage).toBe(
+      DEFAULT_IMAGE,
+    );
     expect(settings.dockerMemory).toBe("1g");
   });
 
-  it("need an image for docker and refuse unknown executors", () => {
-    expect(() => computerSettings({ executor: "docker" })).toThrow(
-      "Running bots in Docker needs an image name",
-    );
+  it("refuse unknown executors and out-of-range values", () => {
     expect(() => computerSettings({ executor: "vm" })).toThrow();
     expect(() => computerSettings({ daytonaArchiveMinutes: 0 })).toThrow();
     expect(() => computerSettings({ sandboxNetwork: "none" })).toThrow();

@@ -82,9 +82,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       policy: "auto",
       model: "m",
       idleSeconds: 60,
-      computer: computerSettings(
-        executor === "docker" ? { executor, dockerImage: "debian:bookworm-slim" } : { executor },
-      ),
+      computer: computerSettings({ executor }),
     };
     const seen: ProviderRequest[] = [];
     const computers = fakeComputers();

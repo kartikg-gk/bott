@@ -23,7 +23,7 @@ export const makeComputer: ComputerFactory = (settings, place) => {
     case "docker":
       return dockerComputer({
         name,
-        image: settings.dockerImage as string,
+        image: settings.dockerImage,
         memory: settings.dockerMemory,
         hostRoot: place.hostRoot,
         memoryDir: place.memoryDir,

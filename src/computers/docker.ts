@@ -76,8 +76,9 @@ function bind(source: string, target: string, readOnly: boolean): string {
 }
 
 /**
- * A long-lived container per bot, created or started on first use. Stopping keeps its files.
- * Commands see none of the gateway's environment. The network is open unless it is closed.
+ * Gives a bot its own Docker container. The container is made the first time it is needed and
+ * then kept: `stop` halts it with the workspace intact, and `remove` deletes it. Nothing from the
+ * gateway's environment is passed in, and network access follows the setting.
  */
 export function dockerComputer(opts: DockerOptions): Workspace {
   const cli = opts.cli ?? dockerCli;
@@ -101,7 +102,7 @@ export function dockerComputer(opts: DockerOptions): Workspace {
   async function verifyMounts(): Promise<void> {
     const found = await cli(["inspect", "--format", "{{json .Mounts}}", opts.name]);
     if (found.code !== 0)
-      throw new ComputerError("The container read-only mounts could not be checked");
+      throw new ComputerError(`Docker would not list the mounts of ${opts.name}`);
     let readOnly = false;
     try {
       const mounts = JSON.parse(found.stdout.toString("utf8")) as {
@@ -110,11 +111,11 @@ export function dockerComputer(opts: DockerOptions): Workspace {
       }[];
       readOnly = mounts.some((m) => m.Destination === MEMORY_MOUNT && m.RW === false);
     } catch {
-      throw new ComputerError("The container read-only mounts could not be checked");
+      throw new ComputerError(`Docker would not list the mounts of ${opts.name}`);
     }
     if (!readOnly) {
       throw new ComputerError(
-        `Container ${opts.name} needs to be recreated with read-only bot note mounts`,
+        `${opts.name} can write to its notes; delete it so it is made again with ${MEMORY_MOUNT} read-only`,
       );
     }
   }
@@ -160,7 +161,9 @@ export function dockerComputer(opts: DockerOptions): Workspace {
       );
     }
     if (result.code !== 0) {
-      throw new ComputerError("The bot container did not start; look at Docker and the image");
+      throw new ComputerError(
+        `Docker could not run ${opts.name} from ${opts.image}; is Docker up and the image there?`,
+      );
     }
   }
 
@@ -190,7 +193,8 @@ export function dockerComputer(opts: DockerOptions): Workspace {
     ...posixFiles(sh, CONTAINER_ROOT),
     async run(command: string, run: RunOptions): Promise<RunResult> {
       await ready();
-      // The deadline also holds inside the container, so a killed exec leaves nothing behind.
+      // `timeout` inside the container ends the command as well, so a host-side kill leaves
+      // nothing running in there.
       const seconds = Math.max(1, Math.ceil(run.timeoutMs / 1000));
       const began = Date.now();
       const result = await cli(
@@ -215,10 +219,13 @@ export function dockerComputer(opts: DockerOptions): Workspace {
     },
     async stop() {
       if (!touched) return;
+      // A start still under way would bring the container back up after the stop.
+      const pending = starting;
       starting = undefined;
+      await pending?.catch(() => {});
       const result = await cli(["stop", "-t", "5", opts.name]);
       if (result.code !== 0 && !result.stderr.includes("No such container")) {
-        throw new ComputerError("The bot container did not stop; look at Docker");
+        throw new ComputerError(`Docker could not halt ${opts.name}`);
       }
     },
     async remove() {
@@ -226,7 +233,7 @@ export function dockerComputer(opts: DockerOptions): Workspace {
       touched = false;
       const result = await cli(["rm", "-f", opts.name]);
       if (result.code !== 0 && !result.stderr.includes("No such container")) {
-        throw new ComputerError("The bot container was not removed; look at Docker");
+        throw new ComputerError(`Docker could not delete ${opts.name}`);
       }
     },
   };

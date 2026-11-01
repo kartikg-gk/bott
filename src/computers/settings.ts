@@ -1,19 +1,23 @@
 import { z } from "zod";
 
-const schema = z
-  .object({
-    executor: z.enum(["local", "docker", "daytona"]).default("local"),
-    dockerImage: z.string().min(1).nullable().default(null),
-    dockerMemory: z.string().min(1).default("2g"),
-    daytonaTarget: z.string().min(1).nullable().default(null),
-    daytonaSnapshot: z.string().min(1).nullable().default(null),
-    daytonaArchiveMinutes: z.number().int().min(1).default(60),
-    /** Containers and sandboxes reach the network unless this is closed. */
-    sandboxNetwork: z.enum(["open", "closed"]).default("open"),
-  })
-  .refine((s) => s.executor !== "docker" || s.dockerImage !== null, {
-    message: "Running bots in Docker needs an image name",
-  });
+/** The image a bot's container runs when the config names none; the file tools need its GNU tools. */
+export const DEFAULT_IMAGE = "debian:bookworm-slim";
+
+const schema = z.object({
+  executor: z.enum(["local", "docker", "daytona"]).default("local"),
+  dockerImage: z
+    .string()
+    .min(1)
+    .nullable()
+    .default(null)
+    .transform((image) => image ?? DEFAULT_IMAGE),
+  dockerMemory: z.string().min(1).default("2g"),
+  daytonaTarget: z.string().min(1).nullable().default(null),
+  daytonaSnapshot: z.string().min(1).nullable().default(null),
+  daytonaArchiveMinutes: z.number().int().min(1).default(60),
+  /** Containers and sandboxes reach the network unless this is closed. */
+  sandboxNetwork: z.enum(["open", "closed"]).default("open"),
+});
 
 /** Where bots' commands run and their files live, as saved in the gateway's config. */
 export type ComputerSettings = z.infer<typeof schema>;

@@ -168,7 +168,7 @@ describe("docker computer", () => {
         ok(JSON.stringify([{ Destination: MEMORY_MOUNT, RW: true }])),
     });
     await expect(computer(cli).run("x", opts())).rejects.toThrow(
-      "Container bott-bot-main-abc needs to be recreated with read-only bot note mounts",
+      "bott-bot-main-abc can write to its notes; delete it so it is made again with /bot/memory read-only",
     );
   });
 
@@ -180,7 +180,7 @@ describe("docker computer", () => {
     });
     const ws = computer(cli);
     await expect(ws.run("x", opts())).rejects.toThrow(
-      "The bot container did not start; look at Docker and the image",
+      "Docker could not run bott-bot-main-abc from debian:bookworm-slim",
     );
     await expect(ws.run("x", opts())).resolves.toMatchObject({ code: 0 });
   });
@@ -192,6 +192,31 @@ describe("docker computer", () => {
     });
     const result = await computer(cli).run("sleep 100", opts());
     expect(result.timedOut).toBe(true);
+  });
+
+  it("waits for a start under way before stopping", async () => {
+    const order: string[] = [];
+    let finishRun = () => {};
+    const cli: DockerCli = async (args) => {
+      order.push(args[0] as string);
+      if (args[0] === "inspect") return fail("Error: No such object");
+      if (args[0] === "run") {
+        await new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+        order.push("run done");
+      }
+      return ok();
+    };
+    const ws = computer(cli);
+    const running = ws.run("x", opts());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const stopping = ws.stop();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).not.toContain("stop");
+    finishRun();
+    await Promise.all([running, stopping]);
+    expect(order.indexOf("stop")).toBeGreaterThan(order.indexOf("run done"));
   });
 
   it("stops keeping files and removes the container", async () => {
@@ -215,7 +240,7 @@ describe("docker computer", () => {
   it("fails loudly when docker cannot remove the container", async () => {
     const { cli } = fakeDocker({ rm: () => fail("permission denied") });
     await expect(computer(cli).remove()).rejects.toThrow(
-      "The bot container was not removed; look at Docker",
+      "Docker could not delete bott-bot-main-abc",
     );
   });
 });

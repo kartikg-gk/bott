@@ -195,7 +195,7 @@ export class SessionManager {
     this.timer.unref();
   }
 
-  /** Where a bot's files live and its commands run: one computer per bot, kept between runs. */
+  /** The bot's computer, made the first time it is asked for and reused after that. */
   workspaceFor(bot: Pick<Bot, "id" | "chief">): Workspace {
     let found = this.workspaces.get(bot.id);
     if (!found) {
