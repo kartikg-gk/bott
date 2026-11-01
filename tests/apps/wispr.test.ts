@@ -121,7 +121,7 @@ describe("wispr", () => {
     expired = true;
     now += 60;
     await expect(connections.token("a", "wispr")).rejects.toThrow(
-      "Connect Wispr Flow again so it registers a fresh OAuth client",
+      "Wispr Flow dropped this server's client. Connect it again.",
     );
     expect(await credentials.get("a", "app-client", "wispr")).toBeNull();
     expect(await credentials.get("a", "app", "wispr")).toBeNull();
@@ -147,7 +147,7 @@ describe("wispr", () => {
       connections.connect({ account: "a", session: "s" }, "wispr"),
     ).rejects.toMatchObject({
       status: 502,
-      message: "Wispr Flow did not accept the OAuth client registration",
+      message: "Wispr Flow would not register a client for this server",
     });
     await db.close();
   });

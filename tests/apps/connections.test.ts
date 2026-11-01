@@ -98,7 +98,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await expect(connections.connect(caller, "nothing")).rejects.toMatchObject({ status: 404 });
     await expect(connections.callback(caller, "github", { state: "short" })).rejects.toMatchObject({
       status: 400,
-      message: "Begin connecting the app again",
+      message: "This sign-in link is not valid. Connect the app again.",
     });
   });
 
@@ -114,7 +114,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       connections.callback(caller, "gmail", { state: first.state, code: "c" }),
     ).rejects.toMatchObject({
       status: 502,
-      message: "Could not connect gmail. Start a new connection.",
+      message: "Connecting gmail failed. Connect it again.",
     });
 
     scope = `${GMAIL_SCOPE} openid`;
@@ -157,11 +157,11 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     revoked = true;
     advance(3600);
     await expect(connections.token("acct", "gmail")).rejects.toThrow(
-      "Reconnect gmail to renew access",
+      "gmail needs to be connected again",
     );
     expect(await credentials.get("acct", "app", "gmail")).toBeNull();
     expect(await store.pluginsFor(bot.id)).toEqual([]);
-    await expect(connections.token("acct", "gmail")).rejects.toThrow("Connect gmail in Apps first");
+    await expect(connections.token("acct", "gmail")).rejects.toThrow("gmail is not connected. Connect it in Apps.");
   });
 
   it("an unreadable saved token asks for a new connection", async () => {
@@ -176,7 +176,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const other = new AppConnections({ ...connections.opts, credentials: broken });
     expect(await other.connected("acct", "github")).toBe(true);
     await expect(other.token("acct", "github")).rejects.toThrow(
-      "Reconnect github to restore its credentials",
+      "The saved github connection cannot be read. Connect it again.",
     );
   });
 
