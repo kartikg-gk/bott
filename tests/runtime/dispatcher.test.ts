@@ -10,12 +10,11 @@ import type { Database } from "../../src/db/database.ts";
 import { Lease } from "../../src/db/leases.ts";
 import { Dispatcher } from "../../src/runtime/dispatcher.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
-import { Store } from "../../src/store/store.ts";
+import { Store, WEB_CHAT } from "../../src/store/store.ts";
 import { type Backend, backends, database } from "../support/fakeD1.ts";
 import { type FakeProvider, fakeProvider } from "../support/fakeProvider.ts";
 import { MemorySink } from "../support/memorySink.ts";
 
-const WEB_CHAT = -1;
 
 function reply(text: string): StreamEvent[] {
   return [
@@ -452,5 +451,33 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     ]);
     expect(await dispatcher.reportInterrupted()).toBe(0);
     expect(sink.sent).toHaveLength(1);
+  });
+
+  it("interrupted tasks from other chats are left alone", async () => {
+    const { db, store, sink, dispatcher } = await setup(gated([]));
+    const chief = await store.chief();
+    const task = (chat: number, user: number) =>
+      store.addTask({
+        chat,
+        user,
+        actor: user,
+        thread: 0,
+        bot: chief.id,
+        goal: "tidy up",
+        policy: "auto",
+        followUp: false,
+      });
+    const elsewhere = await task(555, 9);
+    const web = await task(WEB_CHAT, 7);
+    await store.recover();
+
+    expect(await dispatcher.reportInterrupted()).toBe(1);
+    expect(sink.sent).toMatchObject([
+      { route: { chat: WEB_CHAT, user: 7 }, text: `Task #${web} was interrupted and not replayed.` },
+    ]);
+    const rows = await db.query("SELECT reported FROM tasks WHERE id=?", [elsewhere]);
+    expect(rows).toEqual([{ reported: 0 }]);
+    const routes = await db.query("SELECT chat FROM routes WHERE chat=555");
+    expect(routes).toEqual([]);
   });
 });

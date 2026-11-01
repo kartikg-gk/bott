@@ -2,6 +2,8 @@ import type { Row } from "../db/database.js";
 import type { StoreContext } from "./context.js";
 import { conversation, type Route } from "./routes.js";
 
+/** The chat every web conversation is filed under, as existing databases hold it. */
+export const WEB_CHAT = 2 ** 52;
 /** Web messages take IDs above this, so they never meet IDs from any other source. */
 export const WEB_IDS = 2n ** 59n;
 /** Agent reports take IDs above this, above every web message. */
