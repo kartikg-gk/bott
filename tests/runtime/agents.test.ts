@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelProvider, StreamEvent } from "../../src/agent/providers/types.ts";
 import { emptyUsage } from "../../src/agent/transcript.ts";
 import type { Bot } from "../../src/bots/bots.ts";
+import { savedSession } from "../../src/bots/profiles.ts";
 import type { Database } from "../../src/db/database.ts";
 import { BackgroundAgents, type Timer } from "../../src/runtime/agents.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
@@ -60,7 +61,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
   });
 
-  async function setup(texts: string[], opts: { timer?: Timer } = {}) {
+  async function setup(texts: string[], opts: { timer?: Timer; hosted?: boolean } = {}) {
     const { db } = database(kind);
     open.push(db);
     const store = await Store.open(db, "main", { clock: () => NOW });
@@ -69,17 +70,21 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const config: RuntimeConfig = {
       stateDir: join(root, "state"),
       projectDir: join(root, "project"),
-      sessionsDir: join(root, "sessions"),
+      sessionsDir: opts.hosted ? null : join(root, "sessions"),
       policy: "auto",
       model: "m",
       idleSeconds: 60,
     };
-    const seen: { bot: string; tools: string[] }[] = [];
+    const seen: { bot: string; tools: string[]; context: string }[] = [];
     let started: () => void = () => {};
     const factory = (bot: Bot): ModelProvider => ({
       id: "fake",
       async *stream(req) {
-        seen.push({ bot: bot.name, tools: req.tools.map((t) => t.name) });
+        seen.push({
+          bot: bot.name,
+          tools: req.tools.map((t) => t.name),
+          context: JSON.stringify(req.messages),
+        });
         const next = texts.shift();
         if (next === undefined) throw new Error("no scripted reply left");
         if (next === HANG) {
@@ -266,5 +271,90 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     });
     expect((await call("cancel_scheduled_job", { job_id: 99 })).isError).toBe(true);
     expect(JSON.parse((await call("list_scheduled_jobs", {})).text)).toHaveLength(1);
+  });
+
+  it("five spawns in one reply start only four", async () => {
+    const { store, agents, call } = await setup([HANG, HANG, HANG, HANG]);
+    const outs = await Promise.all(
+      [1, 2, 3, 4, 5].map((n) => call("spawn_agent", { goal: `goal ${n}` })),
+    );
+    expect(outs.filter((o) => !o.isError)).toHaveLength(4);
+    expect(outs.filter((o) => o.isError)).toEqual([
+      { text: "At most 4 background agents can run at once.", isError: true },
+    ]);
+    expect(agents.running()).toBe(4);
+    expect(await store.runningTasks()).toHaveLength(4);
+    for (const id of [1, 2, 3, 4]) agents.cancel(id);
+    await agents.settled();
+  });
+
+  it("finished background runs leave no transcript in memory", async () => {
+    const clock = manualTimer();
+    const { store, sessions, agents, route, hung } = await setup(["done", HANG, HANG], {
+      timer: clock.timer,
+      hosted: true,
+    });
+    await store.createBot({ name: "Writer", role: "Drafts text" });
+    const base = { writer: false, followUp: false, route, actor: 1 };
+    await agents.spawn({ ...base, goal: "finish" });
+    await agents.settled();
+    let waiting = hung();
+    await agents.spawn({ ...base, goal: "be cancelled", bot: "Writer" });
+    await waiting;
+    agents.cancel(2);
+    await agents.settled();
+    waiting = hung();
+    await agents.spawn({ ...base, goal: "run long" });
+    await waiting;
+    clock.fireAll();
+    await agents.settled();
+    await agents.spawn({ ...base, goal: "fail" });
+    await agents.settled();
+    const statuses = await Promise.all(
+      [1, 2, 3, 4].map(async (id) => (await store.task(id))?.status),
+    );
+    expect(statuses).toEqual(["completed", "cancelled", "timed_out", "failed"]);
+    expect(sessions.transcriptsInMemory()).toBe(0);
+  });
+
+  it("a background run on a named bot continues and saves that bot's session", async () => {
+    const { store, sessions, agents, route, seen } = await setup(["first answer", "second answer"]);
+    const writer = await store.createBot({ name: "Writer", role: "Drafts text" });
+    await sessions.delegate(route, writer, "first job");
+    const file = await savedSession(store, writer.id);
+    expect(file).not.toBeNull();
+    await agents.spawn({
+      goal: "second job",
+      bot: "Writer",
+      writer: false,
+      followUp: false,
+      route,
+      actor: 1,
+    });
+    await agents.settled();
+    expect((await store.task(1))?.status).toBe("completed");
+    expect(seen[1]?.context).toContain("first job");
+    expect(seen[1]?.context).toContain("first answer");
+    expect(await savedSession(store, writer.id)).toBe(file);
+    const saved = readFileSync(file as string, "utf8");
+    expect(saved).toContain("second job");
+    expect(saved).toContain("second answer");
+  });
+
+  it("a kept temporary agent remembers its goal", async () => {
+    const { store, sessions, agents, route, seen } = await setup(["noted", "it was the plan"]);
+    await agents.spawn({
+      goal: "remember the plan",
+      writer: false,
+      followUp: false,
+      route,
+      actor: 1,
+    });
+    await agents.settled();
+    const botId = (await store.task(1))?.bot as string;
+    expect(await store.keepBot(botId)).toBe(true);
+    expect(await sessions.delegate(route, { id: botId }, "what was it?")).toBe("it was the plan");
+    expect(seen[1]?.context).toContain("remember the plan");
+    expect(seen[1]?.context).toContain("noted");
   });
 });

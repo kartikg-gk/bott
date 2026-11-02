@@ -55,10 +55,23 @@ export function jsonlSessionStore(dir: string): SessionStore {
   };
 }
 
+/** Transcripts held in memory, which their owner frees once they are no longer needed. */
+export interface MemorySessionStore extends SessionStore {
+  forget(id: string): void;
+  /** How many transcripts are held. */
+  size(): number;
+}
+
 /** Keeps transcripts in memory, seeded with earlier messages (hosted runs). */
-export function memorySessionStore(seed: Record<string, TranscriptEntry[]> = {}): SessionStore {
+export function memorySessionStore(
+  seed: Record<string, TranscriptEntry[]> = {},
+): MemorySessionStore {
   const data = new Map(Object.entries(seed).map(([id, e]) => [id, [...e]]));
   return {
+    forget(id) {
+      data.delete(id);
+    },
+    size: () => data.size,
     async load(id) {
       return [...(data.get(id) ?? [])];
     },

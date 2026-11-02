@@ -41,11 +41,13 @@ interface Running {
 }
 
 /**
- * Runs agents in the background, each on its own task with its own empty session. A reader may
- * only look; a writer may change things and so needs a sandboxed computer.
+ * Runs agents in the background, each on its own task and on its bot's saved session. A reader
+ * may only look; a writer may change things and so needs a sandboxed computer.
  */
 export class BackgroundAgents implements Agents {
   private readonly active = new Map<number, Running>();
+  /** Spawns past the limit check that have no running entry yet. */
+  private starting = 0;
   private readonly max: number;
   private readonly limitMs: number;
   private readonly timer: Timer;
@@ -65,13 +67,25 @@ export class BackgroundAgents implements Agents {
 
   /** Starts an agent on the goal and returns its task number, or why it was not started. */
   async spawn(request: SpawnRequest): Promise<number | string> {
-    const { goal, writer, route, actor } = request;
+    const { writer } = request;
     if (this.stopping) return "The gateway is stopping.";
     if (writer && !this.sessions.sandboxed) return SANDBOX_NEEDED;
-    // Counted in the store, so agents other processes run count too.
-    if ((await this.store.runningTasks()).length >= this.max) {
-      return `At most ${this.max} background agents can run at once.`;
+    const full = `At most ${this.max} background agents can run at once.`;
+    // The slot is taken before the first await, so spawns made together cannot all pass.
+    if (this.active.size + this.starting >= this.max) return full;
+    this.starting++;
+    try {
+      // The store also counts agents other processes run; spawns starting here have no row yet.
+      if ((await this.store.runningTasks()).length + this.starting - 1 >= this.max) return full;
+      return await this.begin(request);
+    } finally {
+      this.starting--;
     }
+  }
+
+  /** Picks or makes the bot, records the task and starts the run. */
+  private async begin(request: SpawnRequest): Promise<number | string> {
+    const { goal, writer, route, actor } = request;
     let bot: Bot;
     let delegation: number | null = null;
     if (request.bot) {
@@ -162,18 +176,15 @@ export class BackgroundAgents implements Agents {
     let status: WorkStatus = "failed";
     let answer = "";
     try {
-      const result = await this.sessions.runAlone(route, bot, goal, {
+      const result = await this.sessions.background(route, bot, goal, {
         policy: writer ? "auto" : "deny",
         readOnly: !writer,
         signal: running.controller.signal,
       });
       answer = result.text;
-      if (timedOut) status = "timed_out";
-      else if (this.stopping) status = "interrupted";
-      else if (running.cancelled) status = "cancelled";
-      else status = result.outcome === "completed" ? "completed" : "failed";
+      status = result.outcome === "completed" ? "completed" : this.stopped(running, timedOut);
     } catch {
-      status = timedOut ? "timed_out" : this.stopping ? "interrupted" : "failed";
+      status = this.stopped(running, timedOut);
     } finally {
       disarm();
     }
@@ -195,5 +206,12 @@ export class BackgroundAgents implements Agents {
         `Review it and tell the user what matters.\n${kept}`,
     );
     this.opts.onReport?.();
+  }
+
+  /** How a run that did not complete ended, given what stopped it. */
+  private stopped(running: Running, timedOut: boolean): WorkStatus {
+    if (timedOut) return "timed_out";
+    if (this.stopping) return "interrupted";
+    return running.cancelled ? "cancelled" : "failed";
   }
 }

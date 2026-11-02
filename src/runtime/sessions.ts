@@ -296,49 +296,17 @@ export class SessionManager {
     if (from?.bot === target.id) {
       throw new Error("A bot cannot delegate back into a workspace that is still running");
     }
-    const saved = this.config.sessionsDir === null ? null : await savedFile(this.store, target.id);
-    const id = saved ? basename(saved, ".jsonl") : randomUUID();
-    const sessionFile = saved ?? (await this.newFile(id));
-    if (!saved && sessionFile) await rememberSession(this.store, target.id, { sessionFile });
-    const releaseBot = await this.holdBot(target.id, false);
-    let release: (() => void) | undefined;
-    let live: Live | undefined;
-    try {
-      release = await this.lockFor(sessionKey(id)).acquire();
-      // A cached copy would miss this run's messages; it reloads on its next use.
-      this.drop(sessionKey(id));
-      live = await this.create(target, await this.build(target), id, sessionFile, {
-        model: this.config.model,
-        policy: opts.policy,
-        route,
-      });
-      live.busy = true;
-      this.delegations.add(live);
-      await recordChat(this.store, target.id, "user", task);
-      const answer = await this.run(live, task, opts.onEvent);
-      await rememberSession(this.store, target.id, { sessionFile });
-      await recordChat(this.store, target.id, "assistant", answer.text);
-      if (answer.outcome !== "completed") throw new RunFailed(answer.outcome, answer.text);
-      return answer.text;
-    } finally {
-      if (live) {
-        live.busy = false;
-        live.listener = undefined;
-        this.delegations.delete(live);
-      }
-      // Anything loaded while this ran missed its messages.
-      this.drop(sessionKey(id));
-      release?.();
-      await releaseBot();
-    }
+    const answer = await this.onSaved(route, target, task, { ...opts, readOnly: false });
+    if (answer.outcome !== "completed") throw new RunFailed(answer.outcome, answer.text);
+    return answer.text;
   }
 
   /**
-   * Runs one task on the bot in a session of its own: it starts empty, lives only in memory and
-   * ends with the task. A read-only run is given only the tools that change nothing. Aborting
-   * `signal` stops the run. Throws `BotBusy` when the bot is already working.
+   * Runs a background task on the bot's saved session and saves it afterwards, as a delegation
+   * does. A read-only run is given only the tools that change nothing. Aborting `signal` stops
+   * the run. Throws `BotBusy` when the bot is already working.
    */
-  async runAlone(
+  async background(
     route: Route,
     bot: Pick<Bot, "id">,
     task: string,
@@ -346,14 +314,39 @@ export class SessionManager {
   ): Promise<Answer> {
     const target = await this.store.bot(bot.id);
     if (!target) throw new Error("The bot was deleted");
+    return this.onSaved(route, target, task, opts);
+  }
+
+  /**
+   * Runs one task on the bot's saved session, or a new one, and saves where it is. The bot is
+   * held for the whole run, so the saved session is read and written by one run at a time. A
+   * session with no file has nowhere to be resumed from, so its transcript is freed at the end.
+   */
+  private async onSaved(
+    route: Route,
+    target: Bot,
+    task: string,
+    opts: PromptOptions & { policy?: Policy | undefined; readOnly: boolean; signal?: AbortSignal },
+  ): Promise<Answer> {
     const releaseBot = await this.holdBot(target.id, false);
+    let id: string | undefined;
+    let sessionFile: string | null = null;
+    let release: (() => void) | undefined;
     let live: Live | undefined;
     const stop = () => void live?.session.request("abort").catch(() => {});
-    opts.signal.addEventListener("abort", stop, { once: true });
+    opts.signal?.addEventListener("abort", stop, { once: true });
     try {
+      const saved =
+        this.config.sessionsDir === null ? null : await savedFile(this.store, target.id);
+      id = saved ? basename(saved, ".jsonl") : randomUUID();
+      sessionFile = saved ?? (await this.newFile(id));
+      if (!saved && sessionFile) await rememberSession(this.store, target.id, { sessionFile });
+      release = await this.lockFor(sessionKey(id)).acquire();
+      // A cached copy would miss this run's messages; it reloads on its next use.
+      this.drop(sessionKey(id));
       const built = await this.build(target);
       const tools = opts.readOnly ? built.tools.filter((t) => t.readOnly) : built.tools;
-      live = await this.create(target, { ...built, tools }, randomUUID(), null, {
+      live = await this.create(target, { ...built, tools }, id, sessionFile, {
         model: this.config.model,
         policy: opts.policy,
         route,
@@ -362,19 +355,34 @@ export class SessionManager {
       this.delegations.add(live);
       await recordChat(this.store, target.id, "user", task);
       // Nothing awaits between this check and the prompt, so a stop cannot fall between them.
-      if (opts.signal.aborted) return { text: "", outcome: "cancelled" };
+      if (opts.signal?.aborted) return { text: "", outcome: "cancelled" };
       const answer = await this.run(live, task, opts.onEvent);
+      await rememberSession(this.store, target.id, { sessionFile });
       await recordChat(this.store, target.id, "assistant", answer.text);
       return answer;
     } finally {
-      opts.signal.removeEventListener("abort", stop);
+      opts.signal?.removeEventListener("abort", stop);
       if (live) {
         live.busy = false;
         live.listener = undefined;
         this.delegations.delete(live);
       }
+      if (id !== undefined) {
+        // Anything loaded while this ran missed its messages.
+        this.drop(sessionKey(id));
+        if (sessionFile === null) {
+          this.memory.forget(id);
+          this.locks.delete(sessionKey(id));
+        }
+      }
+      release?.();
       await releaseBot();
     }
+  }
+
+  /** How many transcripts are held in memory, for conversations without session files. */
+  transcriptsInMemory(): number {
+    return this.memory.size();
   }
 
   /** Closes idle sessions (only the bot's, when given) so changed settings apply on next use. */
