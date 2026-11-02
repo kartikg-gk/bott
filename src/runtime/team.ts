@@ -3,6 +3,7 @@ import type { HostTool, HostToolCall } from "../agent/session.ts";
 import type { ToolOutput } from "../agent/tools.ts";
 import { errorOutput } from "../agent/tools.ts";
 import type { Bot } from "../bots/bots.ts";
+import { parseWhen } from "../schedule/when.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
 import { BotBusy, RunFailed, type SessionManager } from "./sessions.ts";
@@ -13,6 +14,9 @@ export const MAX_ANSWER = 20000;
 const text = z.string().min(1);
 const none = z.object({}).strict();
 const taskId = z.object({ task_id: z.number().int() }).strict();
+const spawn = z
+  .object({ goal: text, bot_name: text.optional(), follow_up: z.boolean().optional() })
+  .strict();
 
 const SCHEMAS = {
   list_bots: none,
@@ -23,9 +27,14 @@ const SCHEMAS = {
     .object({ name: text, description: text.optional(), instructions: z.string().optional() })
     .strict(),
   delegate_task: z.object({ bot_name: text, task: text }).strict(),
+  spawn_agent: spawn,
+  spawn_writer_agent: spawn,
   list_tasks: none,
   check_task: taskId,
   cancel_task: taskId,
+  schedule_job: z.object({ when: text, task: text, bot_name: text.optional() }).strict(),
+  list_scheduled_jobs: none,
+  cancel_scheduled_job: z.object({ job_id: z.number().int() }).strict(),
 };
 
 type Name = keyof typeof SCHEMAS;
@@ -65,6 +74,24 @@ export function teamTools(): HostTool[] {
       readOnly: true,
     },
     {
+      name: "spawn_agent",
+      description:
+        "Start an agent working on a goal that stands on its own and get its task number back " +
+        "straight away. The agent only reads: it can look and answer but changes nothing. Leave " +
+        "out bot_name for a temporary agent. Its answer is posted to this conversation. Set " +
+        "follow_up to hear about it yourself when it ends.",
+      input: SCHEMAS.spawn_agent,
+      readOnly: true,
+    },
+    {
+      name: "spawn_writer_agent",
+      description:
+        "The same as spawn_agent, except the agent may change files and run commands in its " +
+        "sandbox without asking first. Use it only when the user asks for this.",
+      input: SCHEMAS.spawn_writer_agent,
+      readOnly: false,
+    },
+    {
       name: "list_tasks",
       description: "Show the recent background tasks and where each stands.",
       input: SCHEMAS.list_tasks,
@@ -82,11 +109,48 @@ export function teamTools(): HostTool[] {
       input: SCHEMAS.cancel_task,
       readOnly: true,
     },
+    {
+      name: "schedule_job",
+      description:
+        "Set a task that stands on its own to run on a schedule, only when the user asks. when " +
+        "is `every 30m`, `daily 08:00` in the host's time zone, or `at 2026-11-02T08:00+05:30`. " +
+        "What it finds is posted to this conversation. Leave out bot_name to run it yourself, or " +
+        "name another bot to run it.",
+      input: SCHEMAS.schedule_job,
+      readOnly: false,
+    },
+    {
+      name: "list_scheduled_jobs",
+      description: "Show the scheduled jobs that are still live.",
+      input: SCHEMAS.list_scheduled_jobs,
+      readOnly: true,
+    },
+    {
+      name: "cancel_scheduled_job",
+      description: "Stop a scheduled job when asked to.",
+      input: SCHEMAS.cancel_scheduled_job,
+      readOnly: false,
+    },
   ];
 }
 
-/** Running background work, which the team tools can stop. */
+/** What starting a background agent needs. */
+export interface SpawnRequest {
+  goal: string;
+  /** The bot to run it; without one a temporary bot is made for the goal. */
+  bot?: string | undefined;
+  /** Whether the agent may change things; otherwise it only reads. */
+  writer: boolean;
+  /** Whether the chief hears about the result once it ends. */
+  followUp: boolean;
+  route: Route;
+  actor: number;
+}
+
+/** Background work the team tools start and stop. */
 export interface Agents {
+  /** The new task's number, or why it was not started. */
+  spawn(request: SpawnRequest): Promise<number | string>;
   /** Stops the running task; false when nothing here is running it. */
   cancel(id: number): boolean;
 }
@@ -147,6 +211,24 @@ async function delegate(ctx: TeamContext, botName: string, task: string): Promis
   return { bot: target.name, status, answer };
 }
 
+async function start(
+  { agents, route, actor }: TeamContext,
+  args: Args["spawn_agent"],
+  writer: boolean,
+): Promise<string> {
+  if (!agents) throw new Refused("Background agents are not available here.");
+  const started = await agents.spawn({
+    goal: args.goal,
+    bot: args.bot_name,
+    writer,
+    followUp: args.follow_up ?? false,
+    route,
+    actor,
+  });
+  if (typeof started === "string") throw new Refused(started);
+  return `Started task #${started} in the background.`;
+}
+
 const HANDLERS: { [K in Name]: (ctx: TeamContext, args: Args[K]) => Promise<unknown> } = {
   async list_bots({ store }) {
     return (await store.bots()).map((b) => ({
@@ -174,6 +256,8 @@ const HANDLERS: { [K in Name]: (ctx: TeamContext, args: Args[K]) => Promise<unkn
     return `Updated ${target.name}. It applies from its next run.`;
   },
   delegate_task: (ctx, args) => delegate(ctx, args.bot_name, args.task),
+  spawn_agent: (ctx, args) => start(ctx, args, false),
+  spawn_writer_agent: (ctx, args) => start(ctx, args, true),
   async list_tasks({ store }) {
     return (await store.tasks()).map((t) => ({
       id: t.id,
@@ -192,6 +276,51 @@ const HANDLERS: { [K in Name]: (ctx: TeamContext, args: Args[K]) => Promise<unkn
     // A live runner settles its own task; one nobody is running is closed here.
     if (!agents?.cancel(args.task_id)) await store.finishTask(args.task_id, "cancelled", null);
     return "Cancelling.";
+  },
+  async schedule_job({ store, route, actor }, args) {
+    const target = args.bot_name
+      ? await store.findBot(args.bot_name)
+      : await store.bot((await store.chief()).id);
+    if (!target || target.temporary) throw new Refused("Choose a persistent bot");
+    let when: { spec: string; first: number | null };
+    try {
+      when = parseWhen(args.when, store.ctx.clock());
+    } catch (error) {
+      throw new Refused(error instanceof Error ? error.message : "That schedule is not valid");
+    }
+    const { spec, first } = when;
+    const id = await userFacing(
+      store.addJob({
+        chat: route.chat,
+        user: route.user,
+        actor,
+        thread: route.thread,
+        bot: target.id,
+        task: args.task,
+        spec,
+        first,
+      }),
+    );
+    return `Scheduled job ${id}.`;
+  },
+  async list_scheduled_jobs({ store, actor }) {
+    const found = await store.jobs({ actor });
+    return Promise.all(
+      found.map(async (j) => ({
+        id: j.id,
+        bot: (await store.bot(j.bot))?.name ?? "Deleted bot",
+        task: j.task,
+        schedule: j.spec,
+        status: j.status,
+      })),
+    );
+  },
+  async cancel_scheduled_job({ store, actor }, args) {
+    const found = await store.job(args.job_id);
+    const refused = new Refused("There is no job with that number that can be stopped");
+    if (found?.actor !== actor) throw refused;
+    if (!(await store.cancelJob(found.id, actor))) throw refused;
+    return "Cancelled.";
   },
 };
 

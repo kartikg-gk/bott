@@ -87,9 +87,14 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       "create_bot",
       "update_bot",
       "delegate_task",
+      "spawn_agent",
+      "spawn_writer_agent",
       "list_tasks",
       "check_task",
       "cancel_task",
+      "schedule_job",
+      "list_scheduled_jobs",
+      "cancel_scheduled_job",
     ]);
     expect(seen[0]?.tools).toEqual(expect.arrayContaining(names));
     for (const name of names) expect(seen[1]?.tools).not.toContain(name);

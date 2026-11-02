@@ -179,6 +179,14 @@ export class SessionManager {
     return found;
   }
 
+  /**
+   * Whether bots work on sandboxed computers. Every workspace here is this machine, so anything
+   * that needs a sandbox is refused until another computer plugs in.
+   */
+  get sandboxed(): boolean {
+    return false;
+  }
+
   /** The route's session: the live one when it is current, otherwise loaded from where it was saved. */
   async sessionFor(route: Route): Promise<AgentSession> {
     return (await this.liveFor(route.id)).live.session;
@@ -321,6 +329,50 @@ export class SessionManager {
       // Anything loaded while this ran missed its messages.
       this.drop(sessionKey(id));
       release?.();
+      await releaseBot();
+    }
+  }
+
+  /**
+   * Runs one task on the bot in a session of its own: it starts empty, lives only in memory and
+   * ends with the task. A read-only run is given only the tools that change nothing. Aborting
+   * `signal` stops the run. Throws `BotBusy` when the bot is already working.
+   */
+  async runAlone(
+    route: Route,
+    bot: Pick<Bot, "id">,
+    task: string,
+    opts: PromptOptions & { policy: Policy; readOnly: boolean; signal: AbortSignal },
+  ): Promise<Answer> {
+    const target = await this.store.bot(bot.id);
+    if (!target) throw new Error("The bot was deleted");
+    const releaseBot = await this.holdBot(target.id, false);
+    let live: Live | undefined;
+    const stop = () => void live?.session.request("abort").catch(() => {});
+    opts.signal.addEventListener("abort", stop, { once: true });
+    try {
+      const built = await this.build(target);
+      const tools = opts.readOnly ? built.tools.filter((t) => t.readOnly) : built.tools;
+      live = await this.create(target, { ...built, tools }, randomUUID(), null, {
+        model: this.config.model,
+        policy: opts.policy,
+        route,
+      });
+      live.busy = true;
+      this.delegations.add(live);
+      await recordChat(this.store, target.id, "user", task);
+      // Nothing awaits between this check and the prompt, so a stop cannot fall between them.
+      if (opts.signal.aborted) return { text: "", outcome: "cancelled" };
+      const answer = await this.run(live, task, opts.onEvent);
+      await recordChat(this.store, target.id, "assistant", answer.text);
+      return answer;
+    } finally {
+      opts.signal.removeEventListener("abort", stop);
+      if (live) {
+        live.busy = false;
+        live.listener = undefined;
+        this.delegations.delete(live);
+      }
       await releaseBot();
     }
   }
