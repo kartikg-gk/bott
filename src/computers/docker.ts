@@ -68,13 +68,25 @@ function bind(source: string, target: string, readOnly: boolean): string {
 
 /**
  * A long-lived container per bot, created or started on first use. Stopping keeps its files.
- * Commands see none of the gateway's environment.
+ * Commands see none of the gateway's environment, and the container has no network.
  */
 export function dockerComputer(opts: DockerOptions): Workspace {
   const cli = opts.cli ?? dockerCli;
   let starting: Promise<void> | undefined;
   /** Set once a start was tried, so stopping knows there may be something to stop. */
   let touched = false;
+
+  /** A container made before the network rule may still reach out; it must be recreated. */
+  async function verifyNetwork(): Promise<void> {
+    const found = await cli(["inspect", "--format", "{{.HostConfig.NetworkMode}}", opts.name]);
+    if (found.code !== 0)
+      throw new ComputerError("The container network setting could not be checked");
+    if (found.stdout.toString("utf8").trim() !== "none") {
+      throw new ComputerError(
+        `Container ${opts.name} needs to be recreated without network access`,
+      );
+    }
+  }
 
   async function verifyMounts(): Promise<void> {
     const found = await cli(["inspect", "--format", "{{json .Mounts}}", opts.name]);
@@ -104,6 +116,7 @@ export function dockerComputer(opts: DockerOptions): Workspace {
     const state = await cli(["inspect", "--format", "{{.State.Running}}", opts.name]);
     let result: CliResult;
     if (state.code === 0) {
+      await verifyNetwork();
       await verifyMounts();
       if (state.stdout.toString("utf8").trim() === "true") return;
       result = await cli(["start", opts.name]);
@@ -114,6 +127,8 @@ export function dockerComputer(opts: DockerOptions): Workspace {
           "-d",
           "--name",
           opts.name,
+          "--network",
+          "none",
           "--cap-drop",
           "ALL",
           "--security-opt",

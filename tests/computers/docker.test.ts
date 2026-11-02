@@ -107,20 +107,48 @@ describe("docker computer", () => {
     const running = fakeDocker({
       "inspect {{.State.Running}}": () => ok("true\n"),
       "inspect {{json .Mounts}}": () => ok(RO_MOUNT),
+      "inspect {{.HostConfig.NetworkMode}}": () => ok("none\n"),
     });
     await computer(running.cli).run("x", opts());
-    expect(running.calls.map((c) => c[0])).toEqual(["inspect", "inspect", "exec"]);
+    expect(running.calls.map((c) => c[0])).toEqual(["inspect", "inspect", "inspect", "exec"]);
 
     const stopped = fakeDocker({
       "inspect {{.State.Running}}": () => ok("false\n"),
       "inspect {{json .Mounts}}": () => ok(RO_MOUNT),
+      "inspect {{.HostConfig.NetworkMode}}": () => ok("none\n"),
     });
     await computer(stopped.cli).run("x", opts());
-    expect(stopped.calls.map((c) => c[0])).toEqual(["inspect", "inspect", "start", "exec"]);
+    expect(stopped.calls.map((c) => c[0])).toEqual([
+      "inspect",
+      "inspect",
+      "inspect",
+      "start",
+      "exec",
+    ]);
+  });
+
+  it("creates containers without network access", async () => {
+    const { cli, calls } = fakeDocker({
+      "inspect {{.State.Running}}": () => fail("Error: No such object"),
+    });
+    await computer(cli).run("x", opts());
+    expect((calls.find((c) => c[0] === "run") as string[]).join(" ")).toContain("--network none");
+  });
+
+  it("refuses an earlier container that can reach the network", async () => {
+    const { cli, calls } = fakeDocker({
+      "inspect {{.State.Running}}": () => ok("true\n"),
+      "inspect {{.HostConfig.NetworkMode}}": () => ok("bridge\n"),
+    });
+    await expect(computer(cli).run("x", opts())).rejects.toThrow(
+      "Container bott-bot-main-abc needs to be recreated without network access",
+    );
+    expect(calls.some((c) => c[0] === "exec")).toBe(false);
   });
 
   it("refuses a container whose notes are writable", async () => {
     const { cli } = fakeDocker({
+      "inspect {{.HostConfig.NetworkMode}}": () => ok("none\n"),
       "inspect {{.State.Running}}": () => ok("true\n"),
       "inspect {{json .Mounts}}": () =>
         ok(JSON.stringify([{ Destination: MEMORY_MOUNT, RW: true }])),
