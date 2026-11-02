@@ -15,6 +15,20 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** Background agents: their tasks, and temporary bots that exist only while one runs. */
+const backgroundTasks: Upgrade = {
+  reaches: 9,
+  statements: () => [
+    "ALTER TABLE bots ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0",
+    "CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,instance TEXT NOT NULL," +
+      "chat INTEGER NOT NULL,user INTEGER NOT NULL,actor INTEGER NOT NULL," +
+      "thread INTEGER NOT NULL,bot TEXT NOT NULL,goal TEXT NOT NULL,policy TEXT NOT NULL," +
+      "follow_up INTEGER NOT NULL,status TEXT NOT NULL,answer TEXT," +
+      "reported INTEGER NOT NULL DEFAULT 0,created REAL NOT NULL,finished REAL)",
+    "CREATE INDEX tasks_status ON tasks(instance,status)",
+  ],
+};
+
 /** Long-term facts, with their revisions, conflicts and index state. */
 const memoryFacts: Upgrade = {
   reaches: 10,
@@ -169,6 +183,7 @@ const runContext: Upgrade = {
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
 export const UPGRADES: readonly Upgrade[] = [
+  backgroundTasks,
   memoryFacts,
   requestCounts,
   botProfiles,
