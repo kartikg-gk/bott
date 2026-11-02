@@ -109,13 +109,19 @@ export function teamTools(): HostTool[] {
       input: SCHEMAS.cancel_task,
       readOnly: true,
     },
+  ];
+}
+
+/** The job tools, as the model sees them. Every bot is given these. */
+export function jobTools(): HostTool[] {
+  return [
     {
       name: "schedule_job",
       description:
         "Set a task that stands on its own to run on a schedule, only when the user asks. when " +
         "is `every 30m`, `daily 08:00` in the host's time zone, or `at 2026-11-02T08:00+05:30`. " +
-        "What it finds is posted to this conversation. Leave out bot_name to run it yourself, or " +
-        "name another bot to run it.",
+        "What it finds is posted to this conversation. Leave out bot_name to run it yourself. " +
+        "Only the chief can name a different bot.",
       input: SCHEMAS.schedule_job,
       readOnly: false,
     },
@@ -161,6 +167,18 @@ export interface TeamContext {
   route: Route;
   actor: number;
   agents?: Agents | undefined;
+  /** The bot whose session made the call; the chief when not given. */
+  bot?: Bot | undefined;
+}
+
+const JOB_TOOLS = new Set(["schedule_job", "list_scheduled_jobs", "cancel_scheduled_job"]);
+
+/** The bot making the call, which is the chief unless the context names another. */
+async function caller({ store, bot }: TeamContext): Promise<Bot> {
+  if (bot) return bot;
+  const chief = await store.bot((await store.chief()).id);
+  if (!chief) throw new Error("The instance has no chief bot");
+  return chief;
 }
 
 /** A problem the chief should hear about in plain words. */
@@ -277,10 +295,14 @@ const HANDLERS: { [K in Name]: (ctx: TeamContext, args: Args[K]) => Promise<unkn
     if (!agents?.cancel(args.task_id)) await store.finishTask(args.task_id, "cancelled", null);
     return "Cancelling.";
   },
-  async schedule_job({ store, route, actor }, args) {
-    const target = args.bot_name
-      ? await store.findBot(args.bot_name)
-      : await store.bot((await store.chief()).id);
+  async schedule_job(ctx, args) {
+    const { store, route, actor } = ctx;
+    const current = await caller(ctx);
+    const named = args.bot_name;
+    if (named && !current.chief && named.toLowerCase() !== current.name.toLowerCase()) {
+      throw new Refused("A specialist may only schedule work for itself");
+    }
+    const target = named ? await store.findBot(named) : current;
     if (!target || target.temporary) throw new Refused("Choose a persistent bot");
     let when: { spec: string; first: number | null };
     try {
@@ -303,8 +325,10 @@ const HANDLERS: { [K in Name]: (ctx: TeamContext, args: Args[K]) => Promise<unkn
     );
     return `Scheduled job ${id}.`;
   },
-  async list_scheduled_jobs({ store, actor }) {
-    const found = await store.jobs({ actor });
+  async list_scheduled_jobs(ctx) {
+    const { store, actor } = ctx;
+    const current = await caller(ctx);
+    const found = await store.jobs(current.chief ? { actor } : { actor, bot: current.id });
     return Promise.all(
       found.map(async (j) => ({
         id: j.id,
@@ -315,10 +339,13 @@ const HANDLERS: { [K in Name]: (ctx: TeamContext, args: Args[K]) => Promise<unkn
       })),
     );
   },
-  async cancel_scheduled_job({ store, actor }, args) {
+  async cancel_scheduled_job(ctx, args) {
+    const { store, actor } = ctx;
+    const current = await caller(ctx);
     const found = await store.job(args.job_id);
     const refused = new Refused("There is no job with that number that can be stopped");
     if (found?.actor !== actor) throw refused;
+    if (!current.chief && found.bot !== current.id) throw refused;
     if (!(await store.cancelJob(found.id, actor))) throw refused;
     return "Cancelled.";
   },
@@ -330,6 +357,9 @@ export async function answerTeamCall(ctx: TeamContext, call: HostToolCall): Prom
   const name = call.name as Name;
   const parsed = SCHEMAS[name].safeParse(call.input);
   if (!parsed.success) return errorOutput(`Invalid arguments for ${name}.`);
+  if (ctx.bot && !ctx.bot.chief && !JOB_TOOLS.has(name)) {
+    return errorOutput("This tool is only for the chief of staff.");
+  }
   try {
     const handler = HANDLERS[name] as (ctx: TeamContext, args: unknown) => Promise<unknown>;
     return say(await handler(ctx, parsed.data));

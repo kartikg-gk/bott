@@ -92,9 +92,6 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       "list_tasks",
       "check_task",
       "cancel_task",
-      "schedule_job",
-      "list_scheduled_jobs",
-      "cancel_scheduled_job",
     ]);
     expect(seen[0]?.tools).toEqual(expect.arrayContaining(names));
     for (const name of names) expect(seen[1]?.tools).not.toContain(name);

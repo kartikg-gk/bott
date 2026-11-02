@@ -31,7 +31,7 @@ import {
 import { Lease } from "../db/leases.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
-import { type Agents, answerTeamCall, teamTools } from "./team.ts";
+import { type Agents, answerTeamCall, jobTools, teamTools } from "./team.ts";
 
 export interface RuntimeConfig {
   stateDir: string;
@@ -574,17 +574,16 @@ export class SessionManager {
   ): Promise<Live> {
     const provider = this.providers(bot, built.profile);
     const { route } = opts;
-    // Only the chief manages the team; the person who owns the route is who it acts for.
-    const team = bot.chief
-      ? {
-          hostTools: teamTools(),
-          answerHostTool: (call: HostToolCall) =>
-            answerTeamCall(
-              { store: this.store, sessions: this, route, actor: route.user, agents: this.agents },
-              call,
-            ),
-        }
-      : {};
+    // Every bot may schedule its own jobs; only the chief manages the team. The person who owns
+    // the route is who it acts for.
+    const team = {
+      hostTools: bot.chief ? [...teamTools(), ...jobTools()] : jobTools(),
+      answerHostTool: (call: HostToolCall) =>
+        answerTeamCall(
+          { store: this.store, sessions: this, route, actor: route.user, agents: this.agents, bot },
+          call,
+        ),
+    };
     const session = await AgentSession.open({
       id,
       providers: { [provider.id]: provider },

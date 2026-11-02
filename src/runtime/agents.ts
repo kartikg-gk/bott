@@ -48,6 +48,8 @@ export class BackgroundAgents implements Agents {
   private readonly active = new Map<number, Running>();
   /** Spawns past the limit check that have no running entry yet. */
   private starting = 0;
+  /** Settles once the spawn now checking the count has written its task or given up. */
+  private gate: Promise<void> = Promise.resolve();
   private readonly max: number;
   private readonly limitMs: number;
   private readonly timer: Timer;
@@ -75,12 +77,25 @@ export class BackgroundAgents implements Agents {
     if (this.active.size + this.starting >= this.max) return full;
     this.starting++;
     try {
-      // The store also counts agents other processes run; spawns starting here have no row yet.
-      if ((await this.store.runningTasks()).length + this.starting - 1 >= this.max) return full;
-      return await this.begin(request);
+      // One spawn at a time from the count to its task row, so the store's count, which also
+      // holds agents other processes run, includes every agent started here and no other.
+      return await this.serially(async () => {
+        if ((await this.store.runningTasks()).length >= this.max) return full;
+        return this.begin(request);
+      });
     } finally {
       this.starting--;
     }
+  }
+
+  /** Runs `work` after every earlier call has settled. */
+  private serially<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.gate.then(work);
+    this.gate = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
   }
 
   /** Picks or makes the bot, records the task and starts the run. */

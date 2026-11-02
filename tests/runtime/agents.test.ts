@@ -9,7 +9,7 @@ import { savedSession } from "../../src/bots/profiles.ts";
 import type { Database } from "../../src/db/database.ts";
 import { BackgroundAgents, type Timer } from "../../src/runtime/agents.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
-import { answerTeamCall, teamTools } from "../../src/runtime/team.ts";
+import { answerTeamCall, jobTools, teamTools } from "../../src/runtime/team.ts";
 import { Store } from "../../src/store/store.ts";
 import { type Backend, backends, database } from "../support/fakeD1.ts";
 import { MemorySink } from "../support/memorySink.ts";
@@ -214,7 +214,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect((await call("spawn_writer_agent", { goal: "change it" })).isError).toBe(true);
     expect(await db.query("SELECT id FROM tasks")).toEqual([]);
     expect((await store.bots({ temporary: true })).length).toBe(before);
-    const approval = Object.fromEntries(teamTools().map((t) => [t.name, !t.readOnly]));
+    const approval = Object.fromEntries(
+      [...teamTools(), ...jobTools()].map((t) => [t.name, !t.readOnly]),
+    );
     expect(approval).toMatchObject({
       spawn_agent: false,
       spawn_writer_agent: true,
@@ -274,7 +276,15 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   });
 
   it("five spawns in one reply start only four", async () => {
-    const { store, agents, call } = await setup([HANG, HANG, HANG, HANG]);
+    const { store, agents, call } = await setup(Array(8).fill(HANG));
+    // Four made together always all start.
+    const four = await Promise.all(
+      [1, 2, 3, 4].map((n) => call("spawn_agent", { goal: `goal ${n}` })),
+    );
+    expect(four.map((o) => o.isError)).toEqual([false, false, false, false]);
+    expect(agents.running()).toBe(4);
+    for (const id of [1, 2, 3, 4]) agents.cancel(id);
+    await agents.settled();
     const outs = await Promise.all(
       [1, 2, 3, 4, 5].map((n) => call("spawn_agent", { goal: `goal ${n}` })),
     );
@@ -284,7 +294,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     ]);
     expect(agents.running()).toBe(4);
     expect(await store.runningTasks()).toHaveLength(4);
-    for (const id of [1, 2, 3, 4]) agents.cancel(id);
+    for (const id of [5, 6, 7, 8, 9]) agents.cancel(id);
     await agents.settled();
   });
 
@@ -356,5 +366,48 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await sessions.delegate(route, { id: botId }, "what was it?")).toBe("it was the plan");
     expect(seen[1]?.context).toContain("remember the plan");
     expect(seen[1]?.context).toContain("noted");
+  });
+
+  it("a specialist bot can schedule, list and cancel its own jobs, and has no team tools", async () => {
+    const { store, sessions, seen, call } = await setup(["hello"]);
+    const writer = await store.createBot({ name: "Writer", role: "Drafts text" });
+    const theirs = await store.switchBot(await store.conversation(2, 1), writer.id);
+    await sessions.prompt(theirs, "hi");
+    const offered = seen[0]?.tools ?? [];
+    for (const t of jobTools()) expect(offered).toContain(t.name);
+    for (const t of teamTools()) expect(offered).not.toContain(t.name);
+    expect((await call("schedule_job", { when: "every 1h", task: "chief job" })).text).toBe(
+      "Scheduled job 1.",
+    );
+    const ctx = { store, sessions, route: theirs, actor: 1, bot: writer };
+    const ask = async (name: string, input: unknown) => {
+      const out = await answerTeamCall(ctx, { id: "c", name, input });
+      const first = out.content[0];
+      return { text: first?.type === "text" ? first.text : "", isError: out.isError === true };
+    };
+    expect(await ask("schedule_job", { when: "every 30m", task: "my job" })).toEqual({
+      text: "Scheduled job 2.",
+      isError: false,
+    });
+    expect(await store.job(2)).toMatchObject({ bot: writer.id, chat: 2, task: "my job" });
+    expect(
+      await ask("schedule_job", { when: "every 1h", task: "x", bot_name: "Chief of Staff" }),
+    ).toEqual({ text: "A specialist may only schedule work for itself", isError: true });
+    expect(
+      (await ask("schedule_job", { when: "every 1h", task: "y", bot_name: "writer" })).text,
+    ).toBe("Scheduled job 3.");
+    const listed = JSON.parse((await ask("list_scheduled_jobs", {})).text);
+    expect(listed.map((j: { id: number }) => j.id)).toEqual([3, 2]);
+    expect(await ask("cancel_scheduled_job", { job_id: 1 })).toEqual({
+      text: "There is no job with that number that can be stopped",
+      isError: true,
+    });
+    expect((await ask("cancel_scheduled_job", { job_id: 2 })).text).toBe("Cancelled.");
+    expect((await store.job(1))?.status).toBe("active");
+    const only = { text: "This tool is only for the chief of staff.", isError: true };
+    expect(await ask("list_bots", {})).toEqual(only);
+    expect(await ask("spawn_agent", { goal: "g" })).toEqual(only);
+    expect(await ask("delegate_task", { bot_name: "Chief of Staff", task: "t" })).toEqual(only);
+    expect(await store.tasks()).toEqual([]);
   });
 });
