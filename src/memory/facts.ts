@@ -96,8 +96,9 @@ const marks = (count: number) => Array.from({ length: count }, () => "?").join("
  * Every fact and episode with its history, in `memory_facts`. The search index is built from
  * these rows and never the other way round.
  *
- * The database offers no transactions, so each change first moves the row it depends on with a
- * conditional update. When two changes race, one finds the row already moved and is refused.
+ * The database offers no transactions. A change that touches several rows writes any new row
+ * first, hidden as history, then switches every row it affects in one guarded statement. When
+ * two changes race, the second finds the rows already switched and is refused.
  */
 export class FactStore {
   constructor(private readonly ctx: StoreContext) {}
@@ -300,7 +301,7 @@ export class FactStore {
     return marked === 1;
   }
 
-  /** Counts a failed copy, unless the row changed meanwhile and has fresh attempts. */
+  /** Counts a failed copy against the row as it was read; a row changed since is left alone. */
   async markFailed(row: Pick<Unsynced, "id" | "status" | "changed">, error: string): Promise<void> {
     await this.ctx.db.run(
       "UPDATE memory_facts SET sync_errors=sync_errors+1,sync_error=? WHERE instance=? AND id=? " +

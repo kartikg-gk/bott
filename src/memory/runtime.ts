@@ -71,7 +71,11 @@ async function extractorBot(store: Store): Promise<Bot> {
   }
 }
 
-/** Drops the extractor's saved session and its file. */
+/**
+ * Drops the extractor's saved session and its file, so every call starts clean. Another process
+ * extracting at the same moment may lose its session row or file to this; its extraction then
+ * fails and nothing is learned from that exchange, which is the accepted cost.
+ */
 async function forgetSession(store: Store, botId: string): Promise<void> {
   const file = await savedSession(store, botId);
   const { db, instance } = store.ctx;

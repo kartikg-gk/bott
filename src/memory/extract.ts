@@ -30,7 +30,7 @@ export interface FactChange {
   confidence: number;
   tags: string[];
   quote: string | null;
-  /** The known fact this one changes, or null for a new fact. */
+  /** Which known fact gets a new version; null when nothing known is touched. */
   updates: number | null;
   /** The id an outside extractor keeps for the fact. */
   external?: string | null;
@@ -190,7 +190,7 @@ export class LoopExtractor implements Extractor {
   }
 }
 
-/** Saves the changes; returns the numbers of new versions now waiting for the owner. */
+/** Writes each change and gives back the ids of versions left in conflict for the person. */
 export async function applyChanges(
   facts: FactStore,
   scope: Scope,
