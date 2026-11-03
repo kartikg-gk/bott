@@ -100,6 +100,53 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await expect(facts.keep(id, here)).rejects.toThrow("There is no memory with that number");
   });
 
+  /** The same database, except the first write matching `pattern` fails. */
+  function failingOnce(db: Database, pattern: RegExp): Database {
+    let armed = true;
+    return {
+      query: (sql, params) => db.query(sql, params),
+      run: async (sql, params) => {
+        if (armed && pattern.test(sql)) {
+          armed = false;
+          throw new Error("D1 query failed after the request timed out");
+        }
+        return db.run(sql, params);
+      },
+      check: () => db.check(),
+      close: () => db.close(),
+    };
+  }
+
+  it("a revision that fails part way leaves the old fact current", async () => {
+    for (const confidence of [0.95, 0.6]) {
+      const { db } = await fresh();
+      const facts = new FactStore({ db, instance: "main", clock: () => now });
+      const old = (await facts.add(here, "fact", "Runs on Postgres", { source: "x" })) as number;
+      const broken = new FactStore({
+        db: failingOnce(db, /CASE id/),
+        instance: "main",
+        clock: () => now,
+      });
+      await expect(
+        broken.revise(old, here, "Runs on MySQL", confidence, { source: "x" }),
+      ).rejects.toThrow("timed out");
+      expect(await texts(facts, ["active"])).toEqual(["Runs on Postgres"]);
+      expect(await texts(facts, ["conflicted"])).toEqual([]);
+    }
+  });
+
+  it("two revisions of one fact at once: one lands, the other is refused", async () => {
+    const { facts } = await fresh();
+    const old = (await facts.add(here, "fact", "Runs on Postgres", { source: "x" })) as number;
+    const results = await Promise.allSettled([
+      facts.revise(old, here, "Runs on MySQL", 0.95, { source: "x" }),
+      facts.revise(old, here, "Runs on SQLite", 0.95, { source: "x" }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(await texts(facts, ["active"])).toHaveLength(1);
+    expect(await texts(facts, ["superseded"])).toEqual(["Runs on Postgres"]);
+  });
+
   it("forgetting can be restored, and each only applies in its own state", async () => {
     const { facts } = await fresh();
     const id = (await facts.add(here, "fact", "Has a dog", { source: "x" })) as number;

@@ -138,27 +138,49 @@ export class FactStore {
   ): Promise<{ outcome: "superseded" | "conflict"; id: number }> {
     const old = await this.mine(previous, scope, "active");
     const sure = confidence >= UPDATE_CONFIDENCE;
-    const moved = await this.move(
-      sure ? "superseded" : "conflicted",
-      "instance=? AND id=? AND status='active'",
-      [this.ctx.instance, old.id],
-      sure ? "" : ",conflict=id",
-    );
-    if (moved === 0) throw new MemoryError("There is no memory with that number");
+    const { db, instance } = this.ctx;
+    // The new version goes in as history first, so a failure here changes nothing current.
     const values = this.values(
       scope,
       old.kind,
       text.slice(0, MAX_TEXT),
-      sure ? "active" : "conflicted",
+      "superseded",
       { ...details, confidence },
       old.id,
       sure ? null : old.id,
     );
-    const rows = await this.ctx.db.query(
+    const rows = await db.query(
       `INSERT INTO memory_facts(${COLUMNS}) VALUES(${marks(values.length)}) RETURNING id`,
       values,
     );
-    return { outcome: sure ? "superseded" : "conflict", id: Number(rows[0]?.id) };
+    const id = Number(rows[0]?.id);
+    // One statement swaps both rows, and only while the old one is still current.
+    const switched = await db.run(
+      "UPDATE memory_facts SET status=CASE id WHEN ? THEN ? ELSE ? END" +
+        (sure ? "" : ",conflict=CASE id WHEN ? THEN id ELSE conflict END") +
+        ",changed=?,indexed=0,sync_errors=0 WHERE instance=? AND id IN (?,?) AND EXISTS (" +
+        "SELECT 1 FROM memory_facts WHERE instance=? AND id=? AND status='active')",
+      [
+        old.id,
+        sure ? "superseded" : "conflicted",
+        sure ? "active" : "conflicted",
+        ...(sure ? [] : [old.id]),
+        this.ctx.clock(),
+        instance,
+        old.id,
+        id,
+        instance,
+        old.id,
+      ],
+    );
+    if (switched !== 2) {
+      await db.run("DELETE FROM memory_facts WHERE instance=? AND id=? AND status='superseded'", [
+        instance,
+        id,
+      ]);
+      throw new MemoryError("There is no memory with that number");
+    }
+    return { outcome: sure ? "superseded" : "conflict", id };
   }
 
   /** Makes one conflicting version current and supersedes the others. */
@@ -336,9 +358,9 @@ export class FactStore {
   }
 
   /** Moves matching rows to `status` and queues them for the index. */
-  private move(status: FactStatus, where: string, params: Param[], extra = ""): Promise<number> {
+  private move(status: FactStatus, where: string, params: Param[]): Promise<number> {
     return this.ctx.db.run(
-      `UPDATE memory_facts SET status=?,changed=?,indexed=0,sync_errors=0${extra} WHERE ${where}`,
+      `UPDATE memory_facts SET status=?,changed=?,indexed=0,sync_errors=0 WHERE ${where}`,
       [status, this.ctx.clock(), ...params],
     );
   }
