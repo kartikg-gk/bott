@@ -82,6 +82,10 @@ describe("Qdrant index", () => {
   it("names the collection after the index epoch", () => {
     expect(collectionName(null)).toBe("memory");
     expect(collectionName("abc")).toBe("memory-abc");
+    expect(collectionName("abc", "text-embedding-3-small")).toBe(
+      "memory-abc-text-embedding-3-small",
+    );
+    expect(collectionName("abc", "Org/Model_V2")).toBe("memory-abc-org-model-v2");
   });
 
   it("starts empty until the collection exists, then keeps it", async () => {

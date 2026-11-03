@@ -29,9 +29,18 @@ export interface QdrantLike {
   ): Promise<{ points: { id: string | number }[] }>;
 }
 
-/** A new collection per index epoch, so facts loaded from another database start clean. */
-export const collectionName = (epoch: string | null): string =>
-  epoch ? `memory-${epoch}` : "memory";
+/**
+ * One collection per database generation and embedding model: two databases on one server, or
+ * vectors from two models, never land in the same collection.
+ */
+export function collectionName(epoch: string | null, model?: string): string {
+  const base = epoch ? `memory-${epoch}` : "memory";
+  const slug = (model ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return slug ? `${base}-${slug}` : base;
+}
 
 /** The search index on a Qdrant server, for facts that should outlive this process's index. */
 export class QdrantIndex implements VectorIndex {
@@ -109,11 +118,12 @@ export function qdrantIndex(opts: {
   apiKey?: string | undefined;
   embedder: Embedder;
   epoch?: string | null;
+  model?: string;
 }): QdrantIndex {
   const client = new QdrantClient({
     url: opts.url,
     ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
     checkCompatibility: false,
   });
-  return new QdrantIndex(client, opts.embedder, collectionName(opts.epoch ?? null));
+  return new QdrantIndex(client, opts.embedder, collectionName(opts.epoch ?? null, opts.model));
 }

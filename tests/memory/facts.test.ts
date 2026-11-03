@@ -240,6 +240,16 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await facts.epoch()).toBeNull();
     await db.run("INSERT INTO memory_index_epochs VALUES(?,?)", ["main", "abc"]);
     expect(await facts.epoch()).toBe("abc");
+    expect(await facts.ensureEpoch()).toBe("abc");
+  });
+
+  it("a database without an index epoch is given its own", async () => {
+    const first = await fresh();
+    const second = await fresh();
+    const a = await first.facts.ensureEpoch();
+    expect(a).toMatch(/^[0-9a-f]{32}$/);
+    expect(await first.facts.ensureEpoch()).toBe(a);
+    expect(await second.facts.ensureEpoch()).not.toBe(a);
   });
 });
 

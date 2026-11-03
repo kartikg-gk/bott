@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Param, Row } from "../db/database.js";
 import type { StoreContext } from "../store/context.js";
 
@@ -330,6 +331,15 @@ export class FactStore {
       this.ctx.instance,
     ]);
     return rows[0] ? String(rows[0].epoch) : null;
+  }
+
+  /** The index generation, starting a new one when this database has none yet. */
+  async ensureEpoch(): Promise<string> {
+    await this.ctx.db.run("INSERT OR IGNORE INTO memory_index_epochs VALUES(?,?)", [
+      this.ctx.instance,
+      randomUUID().replaceAll("-", ""),
+    ]);
+    return (await this.epoch()) as string;
   }
 
   /** The newest current fact an outside extractor knows by `external`. */

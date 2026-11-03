@@ -40,7 +40,9 @@ describe("opening memory from the settings", () => {
     const config = readMemoryConfig({ enabled: true, qdrantUrl: "http://localhost:6333" });
     const index = memoryIndex(config, fakeEmbedder(), "abc", {});
     expect(index).toBeInstanceOf(QdrantIndex);
-    expect((index as unknown as { collection: string }).collection).toBe("memory-abc");
+    expect((index as unknown as { collection: string }).collection).toBe(
+      "memory-abc-text-embedding-3-small",
+    );
     expect(memoryIndex(readMemoryConfig({}), fakeEmbedder(), null, {})).toBeInstanceOf(CosineIndex);
   });
 });

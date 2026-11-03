@@ -15,7 +15,13 @@ export function memoryIndex(
   env: Env,
 ): VectorIndex {
   if (!config.qdrantUrl) return new CosineIndex(embedder);
-  return qdrantIndex({ url: config.qdrantUrl, apiKey: env.QDRANT_API_KEY, embedder, epoch });
+  return qdrantIndex({
+    url: config.qdrantUrl,
+    apiKey: env.QDRANT_API_KEY,
+    embedder,
+    epoch,
+    model: config.embeddingModel,
+  });
 }
 
 /** Opens long-term memory as the settings describe, or returns null while it is off. */
@@ -33,7 +39,9 @@ export async function openMemory(
       model: config.embeddingModel,
       baseUrl: env.OPENAI_BASE_URL,
     });
-  const epoch = await new FactStore(store.ctx).epoch();
+  const facts = new FactStore(store.ctx);
+  // A shared server needs this database's own generation, so its collection is its own.
+  const epoch = config.qdrantUrl ? await facts.ensureEpoch() : await facts.epoch();
   return Memory.open(store.ctx, memoryIndex(config, embedder, epoch, env), {
     limit: config.searchLimit,
     floor: config.searchFloor,
