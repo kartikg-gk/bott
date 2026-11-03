@@ -15,6 +15,22 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** Long-term facts, with their revisions, conflicts and index state. */
+const memoryFacts: Upgrade = {
+  reaches: 10,
+  statements: () => [
+    "CREATE TABLE memory_facts(id INTEGER PRIMARY KEY AUTOINCREMENT,instance TEXT NOT NULL," +
+      "project TEXT NOT NULL,owner INTEGER NOT NULL,kind TEXT NOT NULL,text TEXT NOT NULL," +
+      "tags TEXT NOT NULL,confidence REAL NOT NULL,quote TEXT,detail TEXT," +
+      "source TEXT NOT NULL,prompt_version INTEGER,status TEXT NOT NULL,replaces INTEGER," +
+      "conflict INTEGER,created REAL NOT NULL,changed REAL NOT NULL," +
+      "indexed INTEGER NOT NULL DEFAULT 0,sync_errors INTEGER NOT NULL DEFAULT 0," +
+      "sync_error TEXT,external TEXT)",
+    "CREATE INDEX memory_owner ON memory_facts(instance,project,owner,status)",
+    "CREATE INDEX memory_unsynced ON memory_facts(instance,indexed)",
+  ],
+};
+
 /** How many model requests each instance made per day. */
 const requestCounts: Upgrade = {
   reaches: 11,
@@ -153,6 +169,7 @@ const runContext: Upgrade = {
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
 export const UPGRADES: readonly Upgrade[] = [
+  memoryFacts,
   requestCounts,
   botProfiles,
   schedulerLease,
