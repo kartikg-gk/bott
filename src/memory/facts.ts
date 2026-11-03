@@ -55,6 +55,8 @@ export interface Unsynced {
   project: string;
   owner: number;
   status: string;
+  /** When the row last changed; a copy counts only if the row has not changed since. */
+  changed: number;
 }
 
 /** Refused memory changes; the message is meant for the person. */
@@ -269,7 +271,8 @@ export class FactStore {
   /** Rows the index has not taken yet, oldest first, skipping those out of attempts. */
   async unsynced(): Promise<Unsynced[]> {
     const rows = await this.ctx.db.query(
-      "SELECT id,text,project,owner,status FROM memory_facts WHERE instance=? AND indexed=0 " +
+      "SELECT id,text,project,owner,status,changed FROM memory_facts WHERE instance=? " +
+        "AND indexed=0 " +
         "AND sync_errors<? ORDER BY id",
       [this.ctx.instance, SYNC_ATTEMPTS],
     );
@@ -279,20 +282,37 @@ export class FactStore {
       project: String(row.project),
       owner: Number(row.owner),
       status: String(row.status),
+      changed: Number(row.changed),
     }));
   }
 
-  async markIndexed(id: number): Promise<void> {
+  /**
+   * Records a finished copy. A row that changed while the copy was in flight stays queued, so
+   * its newer state is copied on the next pass.
+   */
+  async markIndexed(row: Pick<Unsynced, "id" | "status" | "changed">): Promise<boolean> {
+    const marked = await this.ctx.db.run(
+      "UPDATE memory_facts SET indexed=1,sync_error=NULL WHERE instance=? AND id=? AND status=? " +
+        "AND changed=?",
+      [this.ctx.instance, row.id, row.status, row.changed],
+    );
+    return marked === 1;
+  }
+
+  /** Counts a failed copy, unless the row changed meanwhile and has fresh attempts. */
+  async markFailed(row: Pick<Unsynced, "id" | "status" | "changed">, error: string): Promise<void> {
     await this.ctx.db.run(
-      "UPDATE memory_facts SET indexed=1,sync_error=NULL WHERE instance=? AND id=?",
-      [this.ctx.instance, id],
+      "UPDATE memory_facts SET sync_errors=sync_errors+1,sync_error=? WHERE instance=? AND id=? " +
+        "AND status=? AND changed=?",
+      [error, this.ctx.instance, row.id, row.status, row.changed],
     );
   }
 
-  async markFailed(id: number, error: string): Promise<void> {
-    await this.ctx.db.run(
-      "UPDATE memory_facts SET sync_errors=sync_errors+1,sync_error=? WHERE instance=? AND id=?",
-      [error, this.ctx.instance, id],
+  /** Gives every queued fact its attempts back, as a fresh start does. */
+  retryAll(): Promise<number> {
+    return this.ctx.db.run(
+      "UPDATE memory_facts SET sync_errors=0 WHERE instance=? AND indexed=0 AND sync_errors>0",
+      [this.ctx.instance],
     );
   }
 

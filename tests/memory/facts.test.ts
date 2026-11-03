@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Database } from "../../src/db/database.ts";
 import { readMemoryConfig } from "../../src/memory/config.ts";
-import { FactStore, MemoryError, type Scope } from "../../src/memory/facts.ts";
+import { FactStore, MemoryError, type Scope, type Unsynced } from "../../src/memory/facts.ts";
 import { Store } from "../../src/store/store.ts";
 import { type Backend, backends, database } from "../support/fakeD1.ts";
 
@@ -183,7 +183,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   it("a change marks the row for the index again", async () => {
     const { facts, db } = await fresh();
     const id = (await facts.add(here, "fact", "Has a dog", { source: "x" })) as number;
-    await facts.markIndexed(id);
+    expect(await facts.markIndexed((await facts.unsynced())[0] as Unsynced)).toBe(true);
     now += 5;
     await facts.forget(id, here);
     const row = (await db.query("SELECT indexed,changed FROM memory_facts WHERE id=?", [id]))[0];
@@ -193,14 +193,26 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   it("failed index copies are counted, kept and retried", async () => {
     const { facts } = await fresh();
     const id = (await facts.add(here, "fact", "Has a dog", { source: "x" })) as number;
-    for (let i = 0; i < 3; i++) await facts.markFailed(id, "TypeError");
+    const queued = (await facts.unsynced())[0] as Unsynced;
+    for (let i = 0; i < 3; i++) await facts.markFailed(queued, "TypeError");
     expect(await facts.failed(here)).toEqual([{ id, error: "TypeError" }]);
     expect(await facts.unsynced()).toEqual([]);
     expect(await facts.retry(here)).toBe(1);
     expect(await facts.failed(here)).toEqual([]);
     expect((await facts.unsynced()).map((r) => r.id)).toEqual([id]);
-    await facts.markIndexed(id);
+    await facts.markIndexed(queued);
     expect(await facts.unsynced()).toEqual([]);
+  });
+
+  it("a copy of a row that changed meanwhile is not recorded", async () => {
+    const { facts } = await fresh();
+    const id = (await facts.add(here, "fact", "Has a dog", { source: "x" })) as number;
+    const copied = (await facts.unsynced())[0] as Unsynced;
+    now += 1;
+    await facts.forget(id, here);
+    expect(await facts.markIndexed(copied)).toBe(false);
+    await facts.markFailed(copied, "TypeError");
+    expect(await facts.unsynced()).toMatchObject([{ id, status: "retracted", changed: now }]);
   });
 
   it("episodes keep their detail and lists filter by kind, newest first, at most 30", async () => {

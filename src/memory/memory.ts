@@ -45,6 +45,7 @@ export class Memory {
   static async open(ctx: StoreContext, index: VectorIndex, opts: RecallOptions = {}) {
     const memory = new Memory(ctx, index, opts);
     if (!(await index.open())) await memory.facts.reindex();
+    await memory.facts.retryAll();
     await memory.sync();
     return memory;
   }
@@ -60,10 +61,10 @@ export class Memory {
             await this.index.remove(row.id);
           }
         } catch (error) {
-          await this.facts.markFailed(row.id, error instanceof Error ? error.name : "Error");
+          await this.facts.markFailed(row, error instanceof Error ? error.name : "Error");
           continue;
         }
-        await this.facts.markIndexed(row.id);
+        await this.facts.markIndexed(row);
       }
     });
   }

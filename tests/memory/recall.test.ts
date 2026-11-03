@@ -108,6 +108,34 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await texts(memory, "invoice system")).toEqual(["Invoice system runs on Postgres"]);
   });
 
+  it("a fact restored while its removal is in flight still reaches the index", async () => {
+    const { memory, index } = await fresh();
+    const id = await add(memory, "Invoice system runs on Postgres");
+    await memory.facts.forget(id, here);
+    const remove = index.remove.bind(index);
+    index.remove = async (gone) => {
+      await remove(gone);
+      await memory.facts.restore(id, here);
+    };
+    await memory.sync();
+    index.remove = remove;
+    await memory.sync();
+    expect(await texts(memory, "invoice system")).toEqual(["Invoice system runs on Postgres"]);
+  });
+
+  it("facts that ran out of attempts are tried again on the next start", async () => {
+    const { store, memory, index } = await fresh();
+    index.put = async () => {
+      throw new TypeError("index down");
+    };
+    await memory.facts.add(here, "fact", "Invoice system runs on Postgres", { source: "x" });
+    for (let i = 0; i < 3; i++) await memory.sync();
+    expect(await memory.facts.failed(here)).toHaveLength(1);
+    const again = await Memory.open(store.ctx, new CosineIndex(fakeEmbedder()));
+    expect(await again.facts.failed(here)).toEqual([]);
+    expect(await texts(again, "invoice system")).toEqual(["Invoice system runs on Postgres"]);
+  });
+
   it("an index that starts empty is rebuilt from the current facts", async () => {
     const { store, memory } = await fresh();
     await add(memory, "Invoice system runs on Postgres");
