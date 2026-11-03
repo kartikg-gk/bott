@@ -37,8 +37,8 @@ export interface FactChange {
 }
 
 /**
- * Decides what one exchange changes in memory. The gateway keeps the history itself: a change
- * to a known fact below the update confidence is held for the owner as a conflict.
+ * Reads one exchange and proposes fact changes. It only proposes: the fact store decides whether a
+ * change takes over a fact or waits as a conflict.
  */
 export interface Extractor {
   changes(memory: Memory, scope: Scope, user: string, assistant: string): Promise<FactChange[]>;
@@ -133,7 +133,7 @@ function readConfidence(value: unknown): number | null {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Reads the extractor's facts; anything malformed or unsure is dropped. */
+/** Turns the model's answer into fact changes, skipping items that are malformed, empty or unsure. */
 export function parseFacts(answer: string, known: ReadonlySet<number>): FactChange[] {
   const items = firstJson(answer, /\[[\s\S]*\]/);
   if (!Array.isArray(items)) return [];
@@ -243,7 +243,7 @@ export async function recordEpisode(
   });
 }
 
-/** Learns facts and an episode from one finished exchange and copies them to the index. */
+/** Runs fact extraction and the episode check for one exchange, then pushes the results to the index. */
 export async function learn(
   memory: Memory,
   extractor: Extractor,

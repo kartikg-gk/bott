@@ -4,7 +4,7 @@ import type { StoreContext } from "../store/context.js";
 
 /** Stored with every fact so later prompt changes can be told apart. */
 export const PROMPT_VERSION = 1;
-/** A revision below this confidence opens a conflict instead of replacing the stored fact. */
+/** Revisions at least this sure take over; less sure ones wait for the owner to choose. */
 export const UPDATE_CONFIDENCE = 0.9;
 /** Failed index copies after which a fact waits for a retry. */
 export const SYNC_ATTEMPTS = 3;
@@ -102,7 +102,7 @@ const marks = (count: number) => Array.from({ length: count }, () => "?").join("
 export class FactStore {
   constructor(private readonly ctx: StoreContext) {}
 
-  /** Saves a current fact or episode; null when the same text is already current. */
+  /** Inserts an active fact or episode; null if identical text is already active in the scope. */
   async add(
     scope: Scope,
     kind: FactKind,
@@ -129,8 +129,8 @@ export class FactStore {
   }
 
   /**
-   * Replaces a current fact when the change is sure; otherwise holds both versions, neither
-   * current, until the owner keeps one.
+   * Writes a new version of an active fact. A sure one takes over and the old one turns into
+   * history; an unsure one parks both as a conflict, recalled by neither, for the owner to settle.
    */
   async revise(
     previous: number,

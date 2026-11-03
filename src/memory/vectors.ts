@@ -5,7 +5,7 @@ export interface Embedder {
   embed(texts: string[]): Promise<number[][]>;
 }
 
-/** The search index over current facts. It is only ever a copy of the database. */
+/** Where facts are found by meaning. Everything in it can be rebuilt from the rows. */
 export interface VectorIndex {
   /** Prepares the index. False when it starts empty and must be filled from the database. */
   open(): Promise<boolean>;

@@ -108,8 +108,9 @@ export interface MemoryRuntimeOptions {
 }
 
 /**
- * Puts recalled memory above each private message and learns from each finished exchange in
- * the background. Memory never blocks or breaks a conversation: any failure here is dropped.
+ * The dispatcher's hooks around a run: recall goes in front of a private message, and learning
+ * starts after a completed answer, off the run's path. Either one failing is swallowed, so the
+ * person's run goes on as if memory were off.
  */
 export class MemoryRuntime implements ExchangeHooks {
   private readonly running = new Set<Promise<void>>();
@@ -156,13 +157,13 @@ export class MemoryRuntime implements ExchangeHooks {
       );
       if (conflicts.length > 0) await this.opts.notify(route, CONFLICT_NOTICE);
     } catch {
-      // Extraction failures never reach the conversation.
+      // Learning is best effort; the only thing the person hears about is a conflict.
     }
   }
 
   /** The person and project this message's memory belongs to; null when it has none. */
   private async scope(route: Route, item: InboxItem): Promise<Scope | null> {
-    // Agent reports carry another model's output; they are never recalled or remembered.
+    // A report relays what another model said, not the person, so it stays out of memory both ways.
     if (item.id > REPORT_IDS) return null;
     const owner = ownerFor(item.chat, item.actor);
     if (owner === null) return null;

@@ -19,9 +19,9 @@ function day(seconds: number): string {
 }
 
 /**
- * Long-term memory per project and person. Facts are saved in the database first and copied to
- * the search index afterwards, so a failed copy delays recall but never loses a fact. Recall
- * admits only what the database says is current.
+ * Facts per project folder and person, recalled by meaning. The rows are the truth and the vector
+ * index trails them: when a push to the index fails, a fact only shows up later. Every search
+ * result is checked against the rows, so nothing that stopped being active is recalled.
  */
 export class Memory {
   readonly facts: FactStore;
@@ -50,7 +50,7 @@ export class Memory {
     return memory;
   }
 
-  /** Copies changed facts into the index. Failures are counted on the row and retried later. */
+  /** Pushes queued rows to the index: active ones are put, the rest removed. A failed push stays queued. */
   sync(): Promise<void> {
     return this.locked(async () => {
       for (const row of await this.facts.unsynced()) {
@@ -69,14 +69,14 @@ export class Memory {
     });
   }
 
-  /** Relevant current facts, best first. Anything the database does not call current is dropped. */
+  /** Best matches first, keeping only those the rows still mark active. */
   async search(scope: Scope, text: string, limit?: number): Promise<Fact[]> {
     // Searches never wait behind a sync, which may be copying many facts over the network.
     const found = await this.index.search(text, scope, limit ?? this.limit, this.floor);
     return this.facts.current(scope, found);
   }
 
-  /** The block placed above a message, within the token budget; empty when nothing is relevant. */
+  /** The labelled block that goes in front of a message, cut to the token budget; "" if nothing matches. */
   async recall(scope: Scope, text: string): Promise<string> {
     const lines: string[] = [];
     let used = 0;

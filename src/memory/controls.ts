@@ -4,12 +4,12 @@ import type { Store } from "../store/store.js";
 import { type Fact, MemoryError, type Scope } from "./facts.js";
 import type { Memory } from "./memory.js";
 
-/** Memory is personal: only private conversations (positive chat numbers) have an owner. */
+/** Only a one-to-one conversation (a positive chat number) has someone its memory is about. */
 export function ownerFor(chat: number, actor: number): number | null {
   return chat > 0 ? actor : null;
 }
 
-/** Memory belongs to the folder a bot works in, so bots on one project share it. */
+/** Scopes memory to the bot's working folder: every bot in one folder reads and adds the same facts. */
 export function projectOf(dirs: {
   stateDir: string;
   projectDir: string;
