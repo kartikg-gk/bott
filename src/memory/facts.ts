@@ -186,19 +186,15 @@ export class FactStore {
   /** Makes one conflicting version current and supersedes the others. */
   async keep(id: number, scope: Scope): Promise<void> {
     const chosen = await this.mine(id, scope, "conflicted");
-    if (
-      (await this.move("active", "instance=? AND id=? AND status='conflicted'", [
-        this.ctx.instance,
-        chosen.id,
-      ])) === 0
-    ) {
-      throw new MemoryError("There is no memory with that number");
-    }
-    await this.move("superseded", "instance=? AND conflict=? AND id<>? AND status='conflicted'", [
-      this.ctx.instance,
-      chosen.conflict,
-      chosen.id,
-    ]);
+    const { db, instance } = this.ctx;
+    // The whole conflict group changes in one statement, and only while the choice is open.
+    const moved = await db.run(
+      "UPDATE memory_facts SET status=CASE id WHEN ? THEN 'active' ELSE 'superseded' END," +
+        "changed=?,indexed=0,sync_errors=0 WHERE instance=? AND conflict=? AND status='conflicted' " +
+        "AND EXISTS (SELECT 1 FROM memory_facts WHERE instance=? AND id=? AND status='conflicted')",
+      [chosen.id, this.ctx.clock(), instance, chosen.conflict, instance, chosen.id],
+    );
+    if (moved === 0) throw new MemoryError("There is no memory with that number");
   }
 
   /** Retracts a current fact; `restore` brings it back. */

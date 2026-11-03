@@ -147,6 +147,16 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await texts(facts, ["superseded"])).toEqual(["Runs on Postgres"]);
   });
 
+  it("two keeps on one conflict at once leave exactly one current version", async () => {
+    const { facts } = await fresh();
+    const old = (await facts.add(here, "fact", "Runs on Postgres", { source: "x" })) as number;
+    const { id } = await facts.revise(old, here, "Runs on MySQL", 0.6, { source: "x" });
+    const results = await Promise.allSettled([facts.keep(old, here), facts.keep(id, here)]);
+    expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(await texts(facts, ["active"])).toHaveLength(1);
+    expect(await texts(facts, ["conflicted"])).toEqual([]);
+  });
+
   it("forgetting can be restored, and each only applies in its own state", async () => {
     const { facts } = await fresh();
     const id = (await facts.add(here, "fact", "Has a dog", { source: "x" })) as number;
