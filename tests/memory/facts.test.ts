@@ -25,6 +25,44 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   const texts = async (facts: FactStore, statuses: string[], scope = here) =>
     (await facts.facts(scope, { statuses })).map((f) => f.text);
 
+  it("reads, revises and settles rows whose JSON has spaces and escaped letters", async () => {
+    const { facts, db } = await fresh();
+    // Stored the way existing databases hold them: a space after each comma, \u escapes.
+    const tags = '["fact", "preference"]';
+    const detail = '{"goal": "caf\\u00e9 visit", "outcome_quality": "good"}';
+    await db.run(
+      "INSERT INTO memory_facts(instance,project,owner,kind,text,tags,confidence,quote,detail," +
+        "source,prompt_version,status,created,changed,indexed,sync_errors) " +
+        "VALUES ('main','proj',1,'fact','Likes the café on the corner',?,0.9,NULL,?," +
+        "'extracted',1,'active',?,?,1,0)",
+      [tags, detail, now - 100, now - 100],
+    );
+    const [stored] = await facts.facts(here);
+    expect(stored).toMatchObject({
+      text: "Likes the café on the corner",
+      tags: ["fact", "preference"],
+      status: "active",
+    });
+    const id = (stored as { id: number }).id;
+    expect((await facts.current(here, [id])).map((f) => f.id)).toEqual([id]);
+
+    const unsure = await facts.revise(id, here, "Likes the bakery instead", 0.6, {
+      source: "extracted",
+      tags: ["preference"],
+    });
+    expect(unsure.outcome).toBe("conflict");
+    expect(await texts(facts, ["conflicted"])).toHaveLength(2);
+    await facts.keep(id, here);
+    expect(await texts(facts, ["active"])).toEqual(["Likes the café on the corner"]);
+    // Settling the conflict changes status only; the stored JSON is kept byte for byte.
+    const row = await facts.row(id);
+    expect([row?.tags, row?.detail]).toEqual([tags, detail]);
+    expect(JSON.parse(String(row?.detail))).toEqual({
+      goal: "café visit",
+      outcome_quality: "good",
+    });
+  });
+
   it("a new fact is saved as current with the columns existing databases hold", async () => {
     const { facts, db } = await fresh();
     const id = await facts.add(here, "fact", "Invoice system runs on Postgres", {
