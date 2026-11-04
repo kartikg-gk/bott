@@ -63,9 +63,11 @@ describe("daytona computer", () => {
     try {
       const ws = computer({ apiKey: "" });
       await expect(ws.run("x", opts())).rejects.toThrow(
-        "Set DAYTONA_API_KEY to run bots on Daytona",
+        "DAYTONA_API_KEY is not set, so the bot's sandbox cannot be reached",
       );
-      await expect(ws.remove()).rejects.toThrow("Set DAYTONA_API_KEY so this sandbox can be removed");
+      await expect(ws.remove()).rejects.toThrow(
+        "DAYTONA_API_KEY is not set, so the sandbox cannot be deleted and the bot is kept",
+      );
       expect(fake.seen).toEqual([]);
     } finally {
       if (saved !== undefined) process.env.DAYTONA_API_KEY = saved;

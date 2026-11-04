@@ -10,7 +10,7 @@ import { quote } from "./shell.ts";
 export const SANDBOX_ROOT = "/home/daytona/workspace";
 /** Where a copy of the bot's memory notes is placed inside its sandbox. */
 export const SANDBOX_MEMORY = "/home/daytona/memory";
-/** A sandbox nobody uses for this long stops itself; its files stay. */
+/** Minutes without use before the service puts a sandbox to sleep, files intact. */
 export const IDLE_MINUTES = 15;
 /** Extra time the gateway waits beyond a command's own deadline. */
 const EXEC_GRACE_MS = 10_000;
@@ -46,8 +46,9 @@ function sdk(): Promise<Sdk> {
 const started = (sandbox: Sandbox) => String(sandbox.state ?? "").toLowerCase() === "started";
 
 /**
- * A persistent Daytona sandbox per bot. It keeps its files between runs and stops itself when
- * idle; each use starts it again if it did. The gateway's environment never reaches it.
+ * Gives a bot a Daytona sandbox of its own, found by name and made when missing. The sandbox
+ * outlives each run and goes to sleep after a quarter hour of no use; the next call wakes it.
+ * No variable from the gateway's environment is sent to it.
  */
 export function daytonaComputer(opts: DaytonaOptions): Workspace {
   let client: Daytona | undefined;
@@ -61,9 +62,9 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
     return next;
   }
 
-  async function connect(purpose: string): Promise<{ api: Sdk; daytona: Daytona }> {
+  async function connect(withoutKey: string): Promise<{ api: Sdk; daytona: Daytona }> {
     const apiKey = opts.apiKey ?? process.env.DAYTONA_API_KEY;
-    if (!apiKey) throw new ComputerError(`Set DAYTONA_API_KEY to ${purpose}`);
+    if (!apiKey) throw new ComputerError(`DAYTONA_API_KEY is not set, so ${withoutKey}`);
     const api = await sdk();
     client ??= new api.Daytona({
       apiKey,
@@ -84,7 +85,7 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
   }
 
   async function start(): Promise<Sandbox> {
-    const { api, daytona } = await connect("run bots on Daytona");
+    const { api, daytona } = await connect("the bot's sandbox cannot be reached");
     let box: Sandbox;
     try {
       box = await daytona.get(opts.name);
@@ -111,7 +112,9 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
       `mkdir -p ${quote(SANDBOX_ROOT)} ${quote(SANDBOX_MEMORY)}`,
       PREPARE_SECONDS,
     );
-    if (made.exitCode !== 0) throw new ComputerError("The bot workspace could not be set up");
+    if (made.exitCode !== 0) {
+      throw new ComputerError(`The sandbox ${opts.name} would not create its working folders`);
+    }
     const names = await readdir(opts.memoryDir).catch(() => [] as string[]);
     for (const file of names.filter((n) => n.endsWith(".md"))) {
       const data = await readFile(join(opts.memoryDir, file));
@@ -121,7 +124,7 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
     return box;
   }
 
-  /** The started sandbox, starting it again when it stopped itself while idle. */
+  /** Hands back a running sandbox, waking it if the service put it to sleep. */
   function ready(): Promise<Sandbox> {
     return locked(async () => {
       if (!sandbox) return start();
@@ -204,7 +207,7 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
     },
     remove() {
       return locked(async () => {
-        const { api, daytona } = await connect("remove this sandbox");
+        const { api, daytona } = await connect("the sandbox cannot be deleted and the bot is kept");
         try {
           await daytona.delete(await daytona.get(opts.name));
         } catch (err) {
