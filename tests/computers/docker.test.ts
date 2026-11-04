@@ -251,20 +251,22 @@ describe("docker files", () => {
     const cli: DockerCli = async (args, o) => {
       sent.push({ args, stdin: o?.stdin });
       if (args[0] === "inspect") return fail("Error: No such object");
-      if (args.includes(SCRIPTS.read)) return ok("stored");
+      if (args.includes(SCRIPTS.probe)) return ok("f\0");
+      if (args.includes(SCRIPTS.cat)) return ok("stored");
       return ok();
     };
     const ws = computer(cli);
     await ws.writeFile(`${CONTAINER_ROOT}/a.txt`, "stored");
-    const write = sent.find((s) => s.args.includes(SCRIPTS.write));
+    const write = sent.find((s) => s.args.includes(SCRIPTS.put));
     expect(write?.args).toEqual([
       "exec",
       "-i",
       "bott-bot-main-abc",
       "sh",
       "-c",
-      SCRIPTS.write,
+      SCRIPTS.put,
       "sh",
+      CONTAINER_ROOT,
       `${CONTAINER_ROOT}/a.txt`,
     ]);
     expect(write?.stdin?.toString()).toBe("stored");

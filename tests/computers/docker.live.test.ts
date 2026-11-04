@@ -11,10 +11,13 @@ import { dockerComputer } from "../../src/computers/docker.ts";
 
 const IMAGE = "debian:bookworm-slim";
 
+/** A busybox image, as small images ship, to check file access needs no GNU tools. */
+const SMALL_IMAGE = "busybox:1.36";
+
 /** Real containers need a running Docker and the test image already pulled. */
-function dockerReady(): boolean {
+function dockerReady(image = IMAGE): boolean {
   try {
-    const found = spawnSync("docker", ["image", "inspect", IMAGE], {
+    const found = spawnSync("docker", ["image", "inspect", image], {
       stdio: "ignore",
       timeout: 20_000,
     });
@@ -110,5 +113,37 @@ describe.skipIf(!ready)("a real docker computer", () => {
     const gone = spawnSync("docker", ["inspect", name], { stdio: "ignore" });
     expect(gone.status).not.toBe(0);
     expect(existsSync(join(base, "work", "note.txt"))).toBe(true);
+  }, 120_000);
+});
+
+describe.skipIf(!dockerReady(SMALL_IMAGE))("a real busybox container", () => {
+  const name = `bott-test-${randomUUID().slice(0, 8)}`;
+  let base: string;
+
+  afterAll(() => {
+    spawnSync("docker", ["rm", "-f", name], { stdio: "ignore" });
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("gives the file tools what they need without GNU tools", async () => {
+    base = mkdtempSync(join(tmpdir(), "docker-small-"));
+    const ws = dockerComputer({
+      name,
+      image: SMALL_IMAGE,
+      memory: "256m",
+      network: "closed",
+      hostRoot: join(base, "work"),
+      memoryDir: join(base, "memory"),
+    });
+    const tools = fileTools(ws);
+    const run = (tool: string, input: unknown) =>
+      (tools.find((t) => t.name === tool) as (typeof tools)[number]).run(input, {
+        signal: new AbortController().signal,
+      });
+    expect((await run("Write", { path: "x/y.txt", content: "hi\n" })).isError).toBeUndefined();
+    expect(textOf((await run("Read", { path: "x/y.txt" })).content)).toBe("1\thi");
+    const refused = await run("Read", { path: "../etc/passwd" });
+    expect(textOf(refused.content)).toBe("Path is outside the workspace: ../etc/passwd");
+    expect(await ws.list("/workspace/x")).toEqual([{ name: "y.txt", kind: "file" }]);
   }, 120_000);
 });

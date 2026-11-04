@@ -9,7 +9,7 @@ import { posixFiles, type Shell } from "../../src/computers/posix.ts";
 /** The scripts need a POSIX shell with the usual tools; this machine may not have one. */
 function shellReady(): boolean {
   try {
-    const probe = spawnSync("sh", ["-c", "realpath -m -- /a/b && find . -maxdepth 0 -printf %Y"], {
+    const probe = spawnSync("sh", ["-c", "command -v readlink && stat -c %s /"], {
       stdio: "ignore",
       timeout: 10_000,
     });
@@ -23,16 +23,27 @@ let base: string;
 let root: string;
 let files: ReturnType<typeof posixFiles>;
 
-const sh: Shell = async (script, args, stdin) => {
-  const result = await capture("sh", ["-c", script, "sh", ...args], {
-    cwd: base,
-    stdin,
-    timeoutMs: 20_000,
-  });
-  return { code: result.code, stdout: result.stdout };
-};
+/** Runs scripts under this machine's sh, with `before` put ahead of each one. */
+function shellWith(before: string): Shell {
+  return async (script, args, stdin) => {
+    const result = await capture("sh", ["-c", `${before}${script}`, "sh", ...args], {
+      cwd: base,
+      stdin,
+      timeoutMs: 20_000,
+    });
+    return { code: result.code, stdout: result.stdout };
+  };
+}
 
-describe.skipIf(!shellReady())("files reached through a shell", () => {
+// The second shell hides the GNU-only helpers, as a busybox image would lack them.
+const SHELLS = [
+  ["a full shell", ""],
+  ["a shell without realpath or find", "realpath() { return 127; }; find() { return 127; }; "],
+] as const;
+
+describe.skipIf(!shellReady()).each(SHELLS)("files reached through %s", (_name, before) => {
+  const sh = shellWith(before);
+
   beforeEach(async () => {
     base = mkdtempSync(join(tmpdir(), "posix-"));
     mkdirSync(join(base, "work"));
@@ -84,7 +95,35 @@ describe.skipIf(!shellReady())("files reached through a shell", () => {
       { name: "a", kind: "directory" },
       { name: "b.txt", kind: "file" },
     ]);
+    await files.writeFile(`${root}/a/.hidden`, "h");
+    expect(await files.list(`${root}/a`)).toEqual([
+      { name: ".hidden", kind: "file" },
+      { name: "x.txt", kind: "file" },
+    ]);
     await expect(files.list(`${root}/b.txt`)).rejects.toMatchObject({ reason: "kind" });
     await expect(files.list(`${root}/none`)).rejects.toMatchObject({ reason: "missing" });
+  });
+});
+
+describe("a computer missing a tool file access needs", () => {
+  it("is named in the error, and the check runs again after a failure", async () => {
+    let calls = 0;
+    const lacking: Shell = async () => {
+      calls++;
+      return { code: 0, stdout: Buffer.from(["missing readlink", "format stat", ""].join("\0")) };
+    };
+    const files = posixFiles(lacking, "/workspace");
+    await expect(files.realpath("a.txt")).rejects.toThrow(
+      "This computer has no readlink command, which file access needs",
+    );
+    await expect(files.readFile("/workspace/a.txt")).rejects.toThrow("readlink");
+    expect(calls).toBe(2);
+  });
+
+  it("says when stat takes no format", async () => {
+    const oldStat: Shell = async () => ({ code: 0, stdout: Buffer.from("format stat\0") });
+    await expect(posixFiles(oldStat, "/workspace").stat("/workspace/a")).rejects.toThrow(
+      "This computer's stat does not take -c",
+    );
   });
 });

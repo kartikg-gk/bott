@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, posix } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fileTools } from "../../src/agent/tools/files.ts";
 import type { RunOptions, Workspace } from "../../src/agent/tools/workspace.ts";
@@ -162,8 +162,9 @@ describe("daytona computer", () => {
 
 /** Splits `sh -c 'script' sh 'a' 'b'` back into the script and its arguments. */
 function words(command: string): string[] {
-  return [...command.matchAll(/'((?:[^']|''')*)'/g)].map((m) =>
-    (m[1] as string).replaceAll("'''", "'"),
+  const quoted = String.raw`'((?:[^']|'\\'')*)'`;
+  return [...command.matchAll(new RegExp(quoted, "g"))].map((m) =>
+    (m[1] as string).replaceAll(String.raw`'\''`, "'"),
   );
 }
 
@@ -173,19 +174,19 @@ describe("daytona files", () => {
       if (!command.startsWith("sh -c")) return { exitCode: 0, result: "" };
       const [script, ...args] = words(command);
       const stored = fake.files.get(sandbox.id) as Map<string, Buffer>;
-      if (script === SCRIPTS.realpath) {
-        return {
-          exitCode: 0,
-          result: `${args[0]}\n${posix.resolve(args[0] as string, args[1] as string)}`,
+      if (script === SCRIPTS.tools) return { exitCode: 0, result: "" };
+      if (script === SCRIPTS.probe) {
+        const answer = (path: string) => {
+          if (stored.has(path)) return "f";
+          const folder =
+            SANDBOX_ROOT.startsWith(`${path}/`) ||
+            path === SANDBOX_ROOT ||
+            [...stored.keys()].some((k) => k.startsWith(`${path}/`));
+          return folder ? "d" : "n";
         };
+        return { exitCode: 0, result: args.map((a) => `${answer(a)}\0`).join("") };
       }
-      if (script === SCRIPTS.check) {
-        const path = args[0] as string;
-        if (stored.has(path)) return { exitCode: 0, result: "" };
-        const folder = [...stored.keys()].some((k) => k.startsWith(`${path}/`));
-        return { exitCode: folder ? 4 : 3, result: "" };
-      }
-      if (script === SCRIPTS.parent) return { exitCode: 0, result: "" };
+      if (script === SCRIPTS.folder) return { exitCode: 0, result: "" };
       return { exitCode: 1, result: "unexpected script" };
     };
     const tools = fileTools(computer());

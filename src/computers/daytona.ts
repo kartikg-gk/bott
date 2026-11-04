@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Daytona, Sandbox } from "@daytonaio/sdk";
 import type { RunOptions, RunResult, Workspace } from "../agent/tools/workspace.ts";
 import { ComputerError } from "./docker.ts";
-import { checked, posixFiles, SCRIPTS, type Shell } from "./posix.ts";
+import { posixFiles, type Shell } from "./posix.ts";
 import { quote } from "./shell.ts";
 
 /** Where the bot works inside its sandbox. */
@@ -150,11 +150,11 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
     list: files.list,
     // Contents travel through the file service, so bytes arrive as they are.
     async readFile(path) {
-      checked((await sh(SCRIPTS.check, [path])).code, path, "read");
+      await files.mustBeFile(path);
       return (await ready()).fs.downloadFile(path);
     },
     async writeFile(path, data) {
-      checked((await sh(SCRIPTS.parent, [path])).code, path, "write");
+      await files.makeParent(path);
       await (await ready()).fs.uploadFile(Buffer.from(data), path);
     },
     async run(command: string, run: RunOptions): Promise<RunResult> {
