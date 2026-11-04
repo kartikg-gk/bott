@@ -252,7 +252,11 @@ async function execute(
  * listening too late or not at all, would otherwise keep the run from ever settling.
  */
 function untilStopped<T>(work: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
-  if (signal.aborted) return Promise.resolve(undefined);
+  if (signal.aborted) {
+    // Nobody waits for the tool any more; a late failure must not go unhandled.
+    work.catch(() => {});
+    return Promise.resolve(undefined);
+  }
   return new Promise<T | undefined>((resolve, reject) => {
     const stop = () => resolve(undefined);
     signal.addEventListener("abort", stop, { once: true });
