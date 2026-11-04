@@ -92,18 +92,31 @@ describe("runAgentLoop", () => {
 
   it("runs read-only calls in parallel and write calls in order", async () => {
     const log: string[] = [];
+    const listeners: Array<() => void> = [];
+    const gates = new Map<string, () => void>();
     let running = 0;
     let maxRunning = 0;
-    const make = (name: string, readOnly: boolean, delay: number) =>
+    const note = (line: string) => {
+      log.push(line);
+      for (const listener of listeners.splice(0)) listener();
+    };
+    const seen = (line: string) =>
+      new Promise<void>((resolve) => {
+        const check = () => (log.includes(line) ? resolve() : listeners.push(check));
+        check();
+      });
+    const release = (key: string) => gates.get(key)?.();
+    const make = (name: string, readOnly: boolean) =>
       tool(name, readOnly, async (input) => {
-        const n = (input as { n: number }).n;
+        const key = `${name}${(input as { n: number }).n}`;
         running++;
         maxRunning = Math.max(maxRunning, running);
-        log.push(`start ${name}${n}`);
-        await new Promise((r) => setTimeout(r, delay - n));
-        log.push(`end ${name}${n}`);
+        const gate = new Promise<void>((resolve) => gates.set(key, resolve));
+        note(`start ${key}`);
+        await gate;
+        note(`end ${key}`);
         running--;
-        return { content: [{ type: "text", text: `${name}${n}` }] };
+        return { content: [{ type: "text", text: key }] };
       });
     const provider = fakeProvider([
       reply(
@@ -117,18 +130,38 @@ describe("runAgentLoop", () => {
       ),
       reply([{ type: "text", text: "ok" }]),
     ]);
-    const events = await collect(
+    const done = collect(
       runAgentLoop({
         ...base,
         provider,
         messages: [user("go")],
-        tools: [make("read", true, 20), make("write", false, 8)],
+        tools: [make("read", true), make("write", false)],
       }),
     );
-    expect(log.slice(0, 2)).toEqual(["start read1", "start read2"]);
-    expect(log.indexOf("end read2")).toBeLessThan(log.indexOf("end read1"));
-    expect(log.indexOf("start write3")).toBeGreaterThan(log.indexOf("end read1"));
-    expect(log.indexOf("start read4")).toBeGreaterThan(log.indexOf("end write3"));
+
+    await seen("start read2");
+    expect(log).toEqual(["start read1", "start read2"]);
+    release("read2");
+    await seen("end read2");
+    expect(log).not.toContain("start write3");
+    release("read1");
+    await seen("start write3");
+    expect(log).not.toContain("start read4");
+    release("write3");
+    await seen("start read4");
+    release("read4");
+    const events = await done;
+
+    expect(log).toEqual([
+      "start read1",
+      "start read2",
+      "end read2",
+      "end read1",
+      "start write3",
+      "end write3",
+      "start read4",
+      "end read4",
+    ]);
     expect(maxRunning).toBe(2);
     expect(toolResults(events).map((r) => r.callId)).toEqual(["a", "b", "c", "d"]);
   });
