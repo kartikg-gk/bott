@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Daytona, Sandbox } from "@daytonaio/sdk";
 import type { RunOptions, RunResult, Workspace } from "../agent/tools/workspace.ts";
 import { ComputerError } from "./docker.ts";
+import { checked, posixFiles, SCRIPTS, type Shell } from "./posix.ts";
 import { quote } from "./shell.ts";
 
 /** Where the bot works inside its sandbox. */
@@ -14,6 +15,7 @@ export const IDLE_MINUTES = 15;
 /** Extra time the gateway waits beyond a command's own deadline. */
 const EXEC_GRACE_MS = 10_000;
 const PREPARE_SECONDS = 60;
+const FILE_SECONDS = 30;
 
 export interface DaytonaOptions {
   name: string;
@@ -124,9 +126,29 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
     });
   }
 
+  const sh: Shell = async (script, args) => {
+    const box = await ready();
+    const line = `sh -c ${quote(script)} sh ${args.map(quote).join(" ")}`;
+    const result = await exec(box, line, FILE_SECONDS);
+    return { code: result.exitCode, stdout: Buffer.from(result.result ?? "", "utf8") };
+  };
+  const files = posixFiles(sh, SANDBOX_ROOT);
+
   return {
     root: SANDBOX_ROOT,
     memoryPath: SANDBOX_MEMORY,
+    realpath: files.realpath,
+    stat: files.stat,
+    list: files.list,
+    // Contents travel through the file service, so bytes arrive as they are.
+    async readFile(path) {
+      checked((await sh(SCRIPTS.check, [path])).code, path, "read");
+      return (await ready()).fs.downloadFile(path);
+    },
+    async writeFile(path, data) {
+      checked((await sh(SCRIPTS.parent, [path])).code, path, "write");
+      await (await ready()).fs.uploadFile(Buffer.from(data), path);
+    },
     async run(command: string, run: RunOptions): Promise<RunResult> {
       const box = await ready();
       const seconds = Math.max(1, Math.ceil(run.timeoutMs / 1000));

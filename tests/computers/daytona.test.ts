@@ -1,14 +1,17 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fileTools } from "../../src/agent/tools/files.ts";
 import type { RunOptions, Workspace } from "../../src/agent/tools/workspace.ts";
+import { textOf } from "../../src/agent/transcript.ts";
 import {
   daytonaComputer,
   IDLE_MINUTES,
   SANDBOX_MEMORY,
   SANDBOX_ROOT,
 } from "../../src/computers/daytona.ts";
+import { SCRIPTS } from "../../src/computers/posix.ts";
 import { FakeDaytona } from "../support/fakeDaytona.ts";
 
 let fake: FakeDaytona;
@@ -140,5 +143,57 @@ describe("daytona computer", () => {
     await ws.remove();
     expect(fake.sandboxes.has("bott-bot-main-abc")).toBe(false);
     await expect(ws.remove()).resolves.toBeUndefined();
+  });
+});
+
+/** Splits `sh -c 'script' sh 'a' 'b'` back into the script and its arguments. */
+function words(command: string): string[] {
+  return [...command.matchAll(/'((?:[^']|''')*)'/g)].map((m) =>
+    (m[1] as string).replaceAll("'''", "'"),
+  );
+}
+
+describe("daytona files", () => {
+  it("are confined to the workspace and travel through the file service", async () => {
+    fake.executor = (command, _cwd, sandbox) => {
+      if (!command.startsWith("sh -c")) return { exitCode: 0, result: "" };
+      const [script, ...args] = words(command);
+      const stored = fake.files.get(sandbox.id) as Map<string, Buffer>;
+      if (script === SCRIPTS.realpath) {
+        return {
+          exitCode: 0,
+          result: `${args[0]}\n${posix.resolve(args[0] as string, args[1] as string)}`,
+        };
+      }
+      if (script === SCRIPTS.check) {
+        const path = args[0] as string;
+        if (stored.has(path)) return { exitCode: 0, result: "" };
+        const folder = [...stored.keys()].some((k) => k.startsWith(`${path}/`));
+        return { exitCode: folder ? 4 : 3, result: "" };
+      }
+      if (script === SCRIPTS.parent) return { exitCode: 0, result: "" };
+      return { exitCode: 1, result: "unexpected script" };
+    };
+    const tools = fileTools(computer());
+    const run = (name: string, input: unknown) =>
+      (tools.find((t) => t.name === name) as (typeof tools)[number]).run(input, {
+        signal: new AbortController().signal,
+      });
+
+    const wrote = await run("Write", { path: "notes/a.txt", content: "hello\nthere\n" });
+    expect(wrote.isError).toBeUndefined();
+    const sandbox = fake.sandboxes.get("bott-bot-main-abc") as { id: string };
+    const stored = fake.files.get(sandbox.id);
+    expect(stored?.get(`${SANDBOX_ROOT}/notes/a.txt`)?.toString()).toBe("hello\nthere\n");
+
+    expect(textOf((await run("Read", { path: "notes/a.txt" })).content)).toBe("1\thello\n2\tthere");
+    const outside = await run("Read", { path: "../../../etc/passwd" });
+    expect(textOf(outside.content)).toBe("Path is outside the workspace: ../../../etc/passwd");
+    const missing = await run("Read", { path: "nope.txt" });
+    expect(textOf(missing.content)).toBe(
+      `Cannot read nope.txt: ${SANDBOX_ROOT}/nope.txt does not exist`,
+    );
+    const folder = await run("Read", { path: "notes" });
+    expect(textOf(folder.content)).toBe(`Cannot read notes: ${SANDBOX_ROOT}/notes is not a file`);
   });
 });

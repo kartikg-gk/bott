@@ -9,6 +9,7 @@ import {
   dockerComputer,
   MEMORY_MOUNT,
 } from "../../src/computers/docker.ts";
+import { SCRIPTS } from "../../src/computers/posix.ts";
 
 let base: string;
 beforeEach(() => {
@@ -203,5 +204,32 @@ describe("docker computer", () => {
     await expect(computer(cli).remove()).rejects.toThrow(
       "The bot container was not removed; look at Docker",
     );
+  });
+});
+
+describe("docker files", () => {
+  it("are written through the container's input and read from its output", async () => {
+    const sent: { args: string[]; stdin?: Buffer }[] = [];
+    const cli: DockerCli = async (args, o) => {
+      sent.push({ args, stdin: o?.stdin });
+      if (args[0] === "inspect") return fail("Error: No such object");
+      if (args.includes(SCRIPTS.read)) return ok("stored");
+      return ok();
+    };
+    const ws = computer(cli);
+    await ws.writeFile(`${CONTAINER_ROOT}/a.txt`, "stored");
+    const write = sent.find((s) => s.args.includes(SCRIPTS.write));
+    expect(write?.args).toEqual([
+      "exec",
+      "-i",
+      "bott-bot-main-abc",
+      "sh",
+      "-c",
+      SCRIPTS.write,
+      "sh",
+      `${CONTAINER_ROOT}/a.txt`,
+    ]);
+    expect(write?.stdin?.toString()).toBe("stored");
+    expect((await ws.readFile(`${CONTAINER_ROOT}/a.txt`)).toString()).toBe("stored");
   });
 });

@@ -4,7 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fileTools } from "../../src/agent/tools/files.ts";
 import type { RunOptions, Workspace } from "../../src/agent/tools/workspace.ts";
+import { textOf } from "../../src/agent/transcript.ts";
 import { dockerComputer } from "../../src/computers/docker.ts";
 
 const IMAGE = "debian:bookworm-slim";
@@ -72,6 +74,26 @@ describe.skipIf(!ready)("a real docker computer", () => {
   it("kills a command at its deadline", async () => {
     const slow = await ws.run("sleep 30", opts(1));
     expect(slow.timedOut).toBe(true);
+  }, 60_000);
+
+  it("lets the file tools work inside the container, and only inside", async () => {
+    const tools = fileTools(ws);
+    const run = (name: string, input: unknown) =>
+      (tools.find((t) => t.name === name) as (typeof tools)[number]).run(input, {
+        signal: new AbortController().signal,
+      });
+    expect((await run("Write", { path: "dir/f.txt", content: "a\nb\n" })).isError).toBeUndefined();
+    expect(readFileSync(join(base, "work", "dir", "f.txt"), "utf8")).toBe("a\nb\n");
+    expect(textOf((await run("Read", { path: "/workspace/dir/f.txt" })).content)).toBe(
+      "1\ta\n2\tb",
+    );
+    await ws.run("ln -s /etc /workspace/etc-link", opts());
+    for (const given of ["../etc/passwd", "/bot/memory/KNOWLEDGE.md", "etc-link/passwd"]) {
+      const refused = await run("Read", { path: given });
+      expect(textOf(refused.content)).toBe(`Path is outside the workspace: ${given}`);
+    }
+    expect(await ws.list("/workspace/dir")).toEqual([{ name: "f.txt", kind: "file" }]);
+    expect(await ws.stat("/workspace/dir/f.txt")).toMatchObject({ kind: "file", size: 4 });
   }, 60_000);
 
   it("keeps installed files across a stop and removes everything on remove", async () => {

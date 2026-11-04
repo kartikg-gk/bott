@@ -5,6 +5,7 @@ import {
   type RunResult,
   type Workspace,
 } from "../agent/tools/workspace.ts";
+import { posixFiles, type Shell } from "./posix.ts";
 import { quote } from "./shell.ts";
 
 /** Where the bot's workspace folder is mounted inside its container. */
@@ -23,6 +24,8 @@ export interface CliOptions {
   stdin?: Buffer;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Most bytes kept per stream. */
+  limit?: number;
 }
 
 /** Runs one `docker` command. */
@@ -33,6 +36,9 @@ const CLI_TIMEOUT_MS = 60_000;
 const CREATE_TIMEOUT_MS = 300_000;
 /** Extra time the host waits beyond a command's own deadline inside the container. */
 const EXEC_GRACE_MS = 5_000;
+/** File operations get this long, and a file read this many bytes. */
+const FILE_TIMEOUT_MS = 60_000;
+const FILE_LIMIT = 64_000_000;
 
 /** The real `docker` program. Its environment is this process's, which it needs to reach Docker. */
 export const dockerCli: DockerCli = async (args, opts = {}) => {
@@ -40,6 +46,7 @@ export const dockerCli: DockerCli = async (args, opts = {}) => {
     stdin: opts.stdin,
     timeoutMs: opts.timeoutMs ?? CLI_TIMEOUT_MS,
     signal: opts.signal,
+    limit: opts.limit,
   });
   return { ...result, stderr: result.stderr.toString("utf8") };
 };
@@ -166,9 +173,19 @@ export function dockerComputer(opts: DockerOptions): Workspace {
     return starting;
   }
 
+  const sh: Shell = async (script, args, stdin) => {
+    await ready();
+    const result = await cli(
+      ["exec", ...(stdin ? ["-i"] : []), opts.name, "sh", "-c", script, "sh", ...args],
+      { stdin, timeoutMs: FILE_TIMEOUT_MS, limit: FILE_LIMIT },
+    );
+    return { code: result.code, stdout: result.stdout };
+  };
+
   return {
     root: CONTAINER_ROOT,
     memoryPath: MEMORY_MOUNT,
+    ...posixFiles(sh, CONTAINER_ROOT),
     async run(command: string, run: RunOptions): Promise<RunResult> {
       await ready();
       // The deadline also holds inside the container, so a killed exec leaves nothing behind.
