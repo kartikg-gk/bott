@@ -64,6 +64,19 @@ const SECRET_NAMES = new Set([
 ]);
 
 /** The environment a command may see, without keys or tokens. */
+const SECRET_SUFFIXES = [
+  "_TOKEN",
+  "_SECRET",
+  "_API_KEY",
+  "_KEY",
+  "_PASSWORD",
+  "_PASS",
+  "_CREDENTIALS",
+];
+
+/** A URL carrying a user and password, such as postgres://user:pass@host/db. */
+const URL_WITH_CREDENTIALS = /^[a-z][a-z0-9+.-]*:\/\/[^/@\s:]*:[^/@\s]*@/i;
+
 export function scrubbedEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
@@ -72,9 +85,10 @@ export function scrubbedEnv(env: Record<string, string | undefined>): Record<str
     const secret =
       SECRET_NAMES.has(upper) ||
       upper.startsWith("BOTT_") ||
-      upper.endsWith("_TOKEN") ||
-      upper.endsWith("_SECRET") ||
-      upper.endsWith("_API_KEY");
+      upper.startsWith("AWS_") ||
+      upper.includes("_SECRET_") ||
+      SECRET_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
+      URL_WITH_CREDENTIALS.test(value);
     if (!secret) out[name] = value;
   }
   return out;

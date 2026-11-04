@@ -62,11 +62,14 @@ export type SessionEvent =
     }
   | { type: "compaction_start"; reason: "manual" | "threshold" }
   | { type: "compaction_end"; reason: "manual" | "threshold"; summary?: string; error?: string }
-  | { type: "agent_settled"; outcome: Outcome; state: SessionState; error?: string };
+  | { type: "agent_settled"; outcome: Outcome; state: SessionState; error?: string }
+  | SessionResponse;
 
 /** A command reply: `data` on success, `error` on failure. */
 export interface SessionResponse {
   type: "response";
+  /** The caller's request id, echoed so replies can be matched. */
+  id?: string;
   command: string;
   success: boolean;
   data?: unknown;
@@ -145,13 +148,22 @@ export class AgentSession {
     }
   }
 
+  /** Answers one command. `args.id` is the request id; the reply echoes it and is also emitted. */
   async request(command: string, args: Record<string, unknown> = {}): Promise<SessionResponse> {
+    const { id, ...rest } = args;
+    const base =
+      typeof id === "string"
+        ? { type: "response" as const, id, command }
+        : { type: "response" as const, command };
+    let response: SessionResponse;
     try {
-      return { type: "response", command, success: true, data: await this.handle(command, args) };
+      response = { ...base, success: true, data: await this.handle(command, rest) };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      return { type: "response", command, success: false, error };
+      response = { ...base, success: false, error };
     }
+    this.emit(response);
+    return response;
   }
 
   private async handle(command: string, args: Record<string, unknown>): Promise<unknown> {
@@ -177,14 +189,18 @@ export class AgentSession {
         await this.run;
         return undefined;
       case "steer":
-        this.steering.push(userEntry(message()));
+      case "follow_up": {
+        const text = message();
+        if (args.requireActive === true && !this.run) {
+          throw new Error(`There is no active run to take this ${command} message.`);
+        }
+        (command === "steer" ? this.steering : this.followUps).push(userEntry(text));
         return undefined;
-      case "follow_up":
-        this.followUps.push(userEntry(message()));
-        return undefined;
-      case "approve": {
-        const resolve = this.approvals.get(String(args.id));
-        if (!resolve) throw new Error(`No approval is waiting with id ${String(args.id)}.`);
+      }
+      case "respond_to_approval": {
+        const approvalId = String(args.approvalId);
+        const resolve = this.approvals.get(approvalId);
+        if (!resolve) throw new Error(`No approval is waiting with id ${approvalId}.`);
         resolve(args.allow === true);
         return undefined;
       }

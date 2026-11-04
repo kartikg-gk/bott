@@ -94,4 +94,24 @@ describe("scrubbedEnv", () => {
       ["HOME", "LANG", "PATH", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE"].sort(),
     );
   });
+
+  it.each([
+    ["CLOUDFLARE_D1_KEY", "k"],
+    ["MEM0_KEY", "k"],
+    ["DB_PASSWORD", "p"],
+    ["SMTP_PASS", "p"],
+    ["GOOGLE_CREDENTIALS", "c"],
+    ["AWS_REGION", "us-east-1"],
+    ["AWS_SECRET_ACCESS_KEY", "s"],
+    ["MY_SECRET_THING", "s"],
+    ["DATABASE_URL", "postgres://user:pw@db.example/app"],
+    ["REDIS", "redis://:pw@cache:6379"],
+  ])("drops %s", (name, value) => {
+    expect(scrubbedEnv({ [name]: value, PATH: "/bin" })).toEqual({ PATH: "/bin" });
+  });
+
+  it("keeps URLs without credentials", () => {
+    const env = { HOMEPAGE: "https://example.com/a@b", PROXY_URL: "http://user@proxy:8080" };
+    expect(scrubbedEnv(env)).toEqual(env);
+  });
 });

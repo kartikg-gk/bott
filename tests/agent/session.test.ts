@@ -148,7 +148,7 @@ describe("AgentSession", () => {
         expect(e.expiresAt).toBeGreaterThan(Date.now() / 1000);
         expect(ran).toEqual([]);
         kinds.push("approve");
-        await session.request("approve", { id: e.id, allow: true });
+        await session.request("respond_to_approval", { approvalId: e.approvalId, allow: true });
       }
       if (e.type === "approval_resolved") expect(e).toMatchObject({ allow: true });
       if (e.type === "tool_execution_end") kinds.push(`ran:${ran.join()}`);
@@ -349,5 +349,49 @@ describe("AgentSession", () => {
     await untilSettled(session);
     expect(JSON.stringify(provider.requests[1]?.messages.at(-1))).toContain("and then");
     expect((await session.request("steer", {})).success).toBe(false);
+  });
+
+  it("steer and follow_up with requireActive are refused when idle", async () => {
+    const provider = fakeProvider([reply([text("one")])]);
+    const session = await open("s10", provider);
+    for (const command of ["steer", "follow_up"]) {
+      const res = await session.request(command, { message: "late", requireActive: true });
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch(/no active run/);
+    }
+    expect((await session.request("get_state")).data).toMatchObject({ pendingMessageCount: 0 });
+    await session.request("prompt", { message: "start" });
+    await untilSettled(session);
+    expect(JSON.stringify(provider.requests[0]?.messages)).not.toContain("late");
+  });
+
+  it("replies echo the request id and are emitted on the stream", async () => {
+    const session = await open("s11", fakeProvider([]));
+    const res = await session.request("get_state", { id: "req-1" });
+    expect(res).toMatchObject({
+      type: "response",
+      id: "req-1",
+      command: "get_state",
+      success: true,
+    });
+    const bad = await session.request("nonsense", { id: "req-2" });
+    expect(bad).toMatchObject({ id: "req-2", success: false, error: expect.any(String) });
+    const seen: SessionEvent[] = [];
+    for await (const e of session.events()) {
+      seen.push(e);
+      if (seen.length === 2) break;
+    }
+    expect(seen.map((e) => (e as { id?: string }).id)).toEqual(["req-1", "req-2"]);
+  });
+
+  it("respond_to_approval with an unknown approvalId is refused", async () => {
+    const session = await open("s12", fakeProvider([]));
+    const res = await session.request("respond_to_approval", {
+      id: "req",
+      approvalId: "missing",
+      allow: true,
+    });
+    expect(res).toMatchObject({ id: "req", success: false });
+    expect(res.error).toContain("missing");
   });
 });

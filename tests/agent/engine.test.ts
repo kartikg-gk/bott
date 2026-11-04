@@ -193,6 +193,23 @@ describe("runAgentLoop", () => {
     expect(events.at(-1)?.type).toBe("agent_end");
   });
 
+  it("a tool that throws becomes an error result", async () => {
+    const t = tool("Edit", false, async () => {
+      throw new Error("EISDIR: illegal operation on a directory");
+    });
+    const provider = fakeProvider([
+      reply([call("w", "Edit", { n: 1 })], "tool_calls"),
+      reply([{ type: "text", text: "ok" }]),
+    ]);
+    const events = await collect(
+      runAgentLoop({ ...base, provider, messages: [user("go")], tools: [t] }),
+    );
+    const result = nth(toolResults(events), 0);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining("EISDIR") });
+    expect(events.at(-1)?.type).toBe("agent_end");
+  });
+
   it("unknown tool and bad input become error results", async () => {
     const t = tool("echo", true, async () => ({ content: [{ type: "text", text: "x" }] }));
     const provider = fakeProvider([
