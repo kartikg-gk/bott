@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ import type {
 } from "../../src/agent/providers/types.ts";
 import { emptyUsage, textOf } from "../../src/agent/transcript.ts";
 import { type Bot, botRoot } from "../../src/bots/bots.ts";
-import { savedSession } from "../../src/bots/profiles.ts";
+import { rememberSession, savedSession } from "../../src/bots/profiles.ts";
 import type { Database } from "../../src/db/database.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
 import { Store } from "../../src/store/store.ts";
@@ -248,5 +248,68 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(second).not.toBe(first);
     await sessions.prompt(route, "and now?");
     expect(said(requests[1]?.req as ProviderRequest)).toEqual(["keep this", "noted", "and now?"]);
+  });
+  const EARLIER =
+    '{"type":"session","version":3,"id":"old"}\n{"type":"message","message":{"role":"user","content":"hi"}}\n';
+
+  function earlierFile(dir: string, id: string): string {
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${id}.jsonl`);
+    writeFileSync(file, EARLIER);
+    return file;
+  }
+
+  it("an earlier-format session file is left untouched and a new session starts", async () => {
+    const { store, config, manager } = await setup();
+    const { factory, requests } = scripted("fresh start");
+    const sessions = manager(factory);
+    const old = earlierFile(config.sessionsDir as string, "old");
+    const route = await store.persistRoute(await store.conversation(1, 1), {
+      session: "old",
+      sessionFile: old,
+    });
+
+    expect(await sessions.prompt(route, "hello")).toEqual({
+      text: "fresh start",
+      outcome: "completed",
+    });
+    expect(said(requests[0]?.req as ProviderRequest)).toEqual(["hello"]);
+    expect(readFileSync(old, "utf8")).toBe(EARLIER);
+    const now = await store.getRoute(route.id);
+    expect(now?.session).not.toBe("old");
+    expect(now?.sessionFile).toBe(join(config.sessionsDir as string, `${now?.session}.jsonl`));
+    expect((await store.saved(now?.session as string))?.sessionFile).toBe(now?.sessionFile);
+    expect((await store.saved("old"))?.sessionFile).toBe(old);
+  });
+
+  it("delegating to a bot with an earlier saved session starts a new one", async () => {
+    const { store, config, manager } = await setup();
+    const writer = await store.createBot({ name: "Writer", role: "Drafts text" });
+    const old = earlierFile(config.sessionsDir as string, "writer-old");
+    await rememberSession(store, writer.id, { sessionFile: old });
+    const { factory, requests } = scripted("done");
+    const sessions = manager(factory);
+    const route = await store.conversation(1, 1);
+
+    expect(await sessions.delegate(route, writer, "tidy up")).toBe("done");
+    expect(said(requests[0]?.req as ProviderRequest)).toEqual(["tidy up"]);
+    expect(readFileSync(old, "utf8")).toBe(EARLIER);
+    const saved = await savedSession(store, writer.id);
+    expect(saved).not.toBe(old);
+    expect(saved && existsSync(saved)).toBe(true);
+  });
+
+  it("fresh keeps an earlier-format file", async () => {
+    const { store, config, manager } = await setup();
+    const sessions = manager(scripted().factory);
+    const old = earlierFile(config.sessionsDir as string, "old");
+    const route = await store.persistRoute(await store.conversation(1, 1), {
+      session: "old",
+      sessionFile: old,
+    });
+
+    const cleared = await sessions.fresh(route);
+    expect(cleared).toMatchObject({ session: null, sessionFile: null });
+    expect(readFileSync(old, "utf8")).toBe(EARLIER);
   });
 });

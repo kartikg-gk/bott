@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
 import { appendFile, mkdir, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { buildSystem } from "../agent/instructions.ts";
@@ -124,7 +124,12 @@ class Live {
 
 const routeKey = (id: number) => `route:${id}`;
 const sessionKey = (id: string) => `session:${id}`;
-const keyOf = (route: Route) => (route.session ? sessionKey(route.session) : routeKey(route.id));
+/** The lock a route runs under: its session, or its file's session when only the file is known. */
+const keyOf = (route: Route) => {
+  if (route.session) return sessionKey(route.session);
+  if (route.sessionFile) return sessionKey(basename(route.sessionFile, ".jsonl"));
+  return routeKey(route.id);
+};
 
 /** Keeps one agent session per conversation and runs its prompts one at a time. */
 export class SessionManager {
@@ -211,7 +216,12 @@ export class SessionManager {
     try {
       const current = await this.current(route.id);
       this.drop(keyOf(current));
-      if (this.config.sessionsDir !== null && current.sessionFile) {
+      // A transcript in another format is kept for reading; only our own files are removed.
+      if (
+        this.config.sessionsDir !== null &&
+        current.sessionFile &&
+        ownFormat(current.sessionFile)
+      ) {
         await unlink(current.sessionFile).catch((err: NodeJS.ErrnoException) => {
           if (err.code !== "ENOENT") throw err;
         });
@@ -252,6 +262,7 @@ export class SessionManager {
     const saved = this.config.sessionsDir === null ? null : await savedFile(this.store, target.id);
     const id = saved ? basename(saved, ".jsonl") : randomUUID();
     const sessionFile = saved ?? (await this.newFile(id));
+    if (!saved && sessionFile) await rememberSession(this.store, target.id, { sessionFile });
     const release = await this.lockFor(sessionKey(id)).acquire();
     let live: Live | undefined;
     try {
@@ -275,6 +286,8 @@ export class SessionManager {
         live.listener = undefined;
         this.delegations.delete(live);
       }
+      // Anything loaded while this ran missed its messages.
+      this.drop(sessionKey(id));
       release();
     }
   }
@@ -341,13 +354,15 @@ export class SessionManager {
       if (local && route.sessionFile && !existsSync(route.sessionFile)) {
         throw new Error("The the saved session file is gone; start a fresh conversation.");
       }
-      if (!route.session) {
-        const id = route.sessionFile ? basename(route.sessionFile, ".jsonl") : randomUUID();
-        const sessionFile = route.sessionFile ?? (await this.newFile(id));
+      // A transcript in another format stays as it is; the route continues in a new session.
+      const foreign = local && route.sessionFile !== null && !ownFormat(route.sessionFile);
+      if (!route.session || foreign) {
+        const earlier = foreign ? null : route.sessionFile;
+        const id = earlier ? basename(earlier, ".jsonl") : randomUUID();
+        const sessionFile = earlier ?? (await this.newFile(id));
         // Whoever waits on the route's lock now shares it under the session's name.
-        if (!this.locks.has(sessionKey(id))) {
-          this.locks.set(sessionKey(id), this.lockFor(routeKey(route.id)));
-        }
+        if (!this.locks.has(sessionKey(id)))
+          this.locks.set(sessionKey(id), this.lockFor(keyOf(route)));
         route = await this.store.persistRoute(route, { session: id, sessionFile });
       }
       const id = route.session as string;
@@ -495,5 +510,42 @@ export class SessionManager {
 /** The bot's last saved session file, if it is still there. */
 async function savedFile(store: Store, botId: string): Promise<string | null> {
   const file = await savedSession(store, botId);
-  return file && existsSync(file) ? file : null;
+  return file && existsSync(file) && ownFormat(file) ? file : null;
+}
+
+/**
+ * Whether a session file is empty or holds this store's lines. Only the first non-empty line is
+ * read, so the check stays cheap on long transcripts.
+ */
+export function ownFormat(file: string): boolean {
+  const fd = openSync(file, "r");
+  let text = "";
+  try {
+    const chunk = Buffer.alloc(65536);
+    for (;;) {
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      text += chunk.toString("utf8", 0, read);
+      // Stop once a complete non-empty line is in hand.
+      if (/\S[^\n]*\n/.test(text)) break;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  const first = text.split("\n").find((l) => l.trim());
+  if (first === undefined) return true;
+  try {
+    const line: unknown = JSON.parse(first);
+    if (!line || typeof line !== "object") return false;
+    if ("reset" in line) return Array.isArray(line.reset);
+    if (!("entry" in line)) return false;
+    const entry = line.entry as { role?: unknown; content?: unknown } | null;
+    return (
+      !!entry &&
+      ["user", "assistant", "tool"].includes(String(entry.role)) &&
+      Array.isArray(entry.content)
+    );
+  } catch {
+    return false;
+  }
 }
