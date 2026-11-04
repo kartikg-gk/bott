@@ -79,6 +79,18 @@ async function forgetSession(store: Store, botId: string): Promise<void> {
   if (file && existsSync(file)) rmSync(file, { force: true });
 }
 
+const RECALL_SECONDS = 2;
+
+/** The work's result, or "" once `ms` pass first; the work is left to finish on its own. */
+function withinTime(work: Promise<string>, ms: number): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve(""), ms);
+  });
+  work.catch(() => {});
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
 export interface MemoryRuntimeOptions {
   store: Store;
   memory: Memory;
@@ -89,6 +101,8 @@ export interface MemoryRuntimeOptions {
   model: (route: Route) => ModelCall;
   /** Defaults to extraction through our own agent loop. */
   extractor?: (call: ModelCall) => Extractor;
+  /** Longest recall may hold up a message before it goes without memory; 2 s by default. */
+  recallSeconds?: number;
   /** Tells the conversation something; failures are ignored. */
   notify: (route: Route, text: string) => Promise<void>;
 }
@@ -106,7 +120,10 @@ export class MemoryRuntime implements ExchangeHooks {
     try {
       const scope = await this.scope(route, item);
       if (!scope || !this.opts.config.enabled) return "";
-      return await this.opts.memory.recall(scope, item.text);
+      return await withinTime(
+        this.opts.memory.recall(scope, item.text),
+        (this.opts.recallSeconds ?? RECALL_SECONDS) * 1000,
+      );
     } catch {
       return "";
     }

@@ -71,9 +71,8 @@ export class Memory {
 
   /** Relevant current facts, best first. Anything the database does not call current is dropped. */
   async search(scope: Scope, text: string, limit?: number): Promise<Fact[]> {
-    const found = await this.locked(() =>
-      this.index.search(text, scope, limit ?? this.limit, this.floor),
-    );
+    // Searches never wait behind a sync, which may be copying many facts over the network.
+    const found = await this.index.search(text, scope, limit ?? this.limit, this.floor);
     return this.facts.current(scope, found);
   }
 

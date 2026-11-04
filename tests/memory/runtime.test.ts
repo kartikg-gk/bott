@@ -227,3 +227,64 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(sink.texts()).toEqual(["ok"]);
   });
 });
+
+describe("recall that takes too long", () => {
+  const open: Database[] = [];
+  afterEach(async () => {
+    await Promise.all(open.splice(0).map((db) => db.close()));
+  });
+
+  /** Embeds normally until a text containing `slow` arrives, which never gets an answer. */
+  function stallingEmbedder() {
+    const inner = fakeEmbedder();
+    return {
+      slow: "\u0000",
+      async embed(texts: string[]): Promise<number[][]> {
+        if (texts.some((t) => t.includes(this.slow))) return new Promise(() => {});
+        return inner.embed(texts);
+      },
+    };
+  }
+
+  async function setup() {
+    const { db } = database("sqlite");
+    open.push(db);
+    const store = await Store.open(db, "main");
+    const embedder = stallingEmbedder();
+    const memory = await Memory.open(store.ctx, new CosineIndex(embedder));
+    const project = projectOf({ stateDir: "s", projectDir: "p" });
+    const scope = { project: project({ id: "x", chief: true }), owner: ME };
+    const runtime = new MemoryRuntime({
+      store,
+      memory,
+      config: readMemoryConfig({ enabled: true }),
+      project,
+      model: () => async () => "[]",
+      notify: async () => {},
+      recallSeconds: 0.05,
+    });
+    const route = await store.conversation(PRIVATE, ME);
+    const item = await store.admitWeb(PRIVATE, ME, "invoice system question");
+    return { memory, embedder, scope, runtime, route, item };
+  }
+
+  it("a hanging embedder lets the message go without memory", async () => {
+    const { memory, embedder, scope, runtime, route, item } = await setup();
+    await memory.facts.add(scope, "fact", "Invoice system runs on Postgres", { source: "x" });
+    await memory.sync();
+    embedder.slow = "invoice";
+    const started = Date.now();
+    expect(await runtime.before(route, item)).toBe("");
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("a search does not wait behind a sync that is stuck", async () => {
+    const { memory, embedder, scope, runtime, route, item } = await setup();
+    await memory.facts.add(scope, "fact", "Invoice system runs on Postgres", { source: "x" });
+    await memory.sync();
+    embedder.slow = "Juno";
+    await memory.facts.add(scope, "fact", "Their cat is named Juno", { source: "x" });
+    void memory.sync();
+    expect(await runtime.before(route, item)).toContain("Invoice system runs on Postgres");
+  });
+});

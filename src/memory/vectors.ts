@@ -75,7 +75,8 @@ export class CosineIndex implements VectorIndex {
   }
 }
 
-const EMBED_TIMEOUT_MS = 30_000;
+/** Longest one embeddings request may take. */
+const EMBED_TIMEOUT_MS = 10_000;
 
 /**
  * Vectors from an OpenAI-style `/embeddings` endpoint. The key is sent only in the

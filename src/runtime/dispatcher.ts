@@ -281,6 +281,10 @@ export class Dispatcher {
         return;
       }
       const above = (await this.exchange?.before(route, item).catch(() => "")) ?? "";
+      if (active.stopped) {
+        await this.store.mark(item, "cancelled");
+        return;
+      }
       const answer = await this.sessions.prompt(route, above + item.text, {
         onEvent: (e, source) => this.observe(active, e, source),
       });

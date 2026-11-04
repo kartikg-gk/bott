@@ -2,6 +2,9 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 import type { Scope } from "./facts.js";
 import type { Embedder, VectorIndex } from "./vectors.js";
 
+/** Longest one request to the Qdrant server may take. */
+const QDRANT_TIMEOUT_MS = 10_000;
+
 /** The client calls the index makes, so tests can answer them without a server. */
 export interface QdrantLike {
   collectionExists(name: string): Promise<{ exists: boolean }>;
@@ -124,6 +127,7 @@ export function qdrantIndex(opts: {
     url: opts.url,
     ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
     checkCompatibility: false,
+    timeout: QDRANT_TIMEOUT_MS,
   });
   return new QdrantIndex(client, opts.embedder, collectionName(opts.epoch ?? null, opts.model));
 }
