@@ -247,6 +247,28 @@ async function execute(
   };
 }
 
+/**
+ * Waits for a tool's result, but no longer than the run lasts. A tool that misses the stop, by
+ * listening too late or not at all, would otherwise keep the run from ever settling.
+ */
+function untilStopped<T>(work: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise<T | undefined>((resolve, reject) => {
+    const stop = () => resolve(undefined);
+    signal.addEventListener("abort", stop, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", stop);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", stop);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function outputOf(
   call: ToolCall,
   opts: AgentLoopOptions,
@@ -274,8 +296,11 @@ async function outputOf(
   }
   if (signal.aborted) return errorOutput(ABORTED_TEXT);
   try {
-    const output = await tool.run(parsed.data, { signal, onUpdate, callId: call.id });
-    return signal.aborted ? errorOutput(ABORTED_TEXT) : output;
+    const output = await untilStopped(
+      tool.run(parsed.data, { signal, onUpdate, callId: call.id }),
+      signal,
+    );
+    return signal.aborted || output === undefined ? errorOutput(ABORTED_TEXT) : output;
   } catch (err) {
     if (signal.aborted) return errorOutput(ABORTED_TEXT);
     return errorOutput(err instanceof Error ? err.message : String(err));

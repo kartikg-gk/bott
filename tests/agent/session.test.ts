@@ -235,20 +235,55 @@ describe("AgentSession", () => {
             killed = true;
             resolve({ content: [text("killed")], isError: true });
           });
+          started();
         }),
     };
+    let started = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
     const provider = fakeProvider([reply([call("b1", "Bash")])]);
     const session = await open("s6", provider, { tools: [slow], policy: "auto" });
     await session.request("prompt", { message: "loop forever" });
     const seen = await untilSettled(session, async (e) => {
       if (e.type === "tool_execution_start") {
         expect(e).toMatchObject({ toolCallId: "b1", toolName: "Bash" });
+        // Stop once the command is really running, whatever the approval check awaits first.
+        await running;
         expect((await session.request("abort")).success).toBe(true);
       }
     });
     expect(killed).toBe(true);
     expect(seen.at(-1)).toMatchObject({ type: "agent_settled", outcome: "cancelled" });
     expect((await session.request("get_state")).data).toMatchObject({ isStreaming: false });
+  });
+
+  it("abort settles even when the running tool never notices it", async () => {
+    let started = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const deaf: ToolSpec = {
+      name: "Bash",
+      description: "shell",
+      input: z.object({}),
+      readOnly: false,
+      run: () =>
+        new Promise(() => {
+          started();
+        }),
+    };
+    const provider = fakeProvider([reply([call("d1", "Bash")])]);
+    const session = await open("s6d", provider, { tools: [deaf], policy: "auto" });
+    await session.request("prompt", { message: "hang" });
+    const seen = await untilSettled(session, async (e) => {
+      if (e.type === "tool_execution_start") {
+        await running;
+        await session.request("abort");
+      }
+    });
+    expect(seen.find((e) => e.type === "tool_execution_end")).toMatchObject({ isError: true });
+    expect(seen.at(-1)).toMatchObject({ type: "agent_settled", outcome: "cancelled" });
   });
 
   it("abort while waiting for approval denies the call", async () => {
