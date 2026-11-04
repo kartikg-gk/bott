@@ -30,6 +30,8 @@ export interface SessionState {
   sessionId: string;
   model: { provider: string; id: string };
   isStreaming: boolean;
+  /** What the session is doing now: "prompt" during a run, otherwise null. */
+  operation: "prompt" | null;
   messageCount: number;
   pendingMessageCount: number;
 }
@@ -269,6 +271,7 @@ export class AgentSession {
       sessionId: this.opts.id,
       model: { provider: this.providerName, id: this.model },
       isStreaming: this.run !== undefined,
+      operation: this.run ? "prompt" : null,
       messageCount: this.transcript.length,
       pendingMessageCount: this.steering.length + this.followUps.length,
     };

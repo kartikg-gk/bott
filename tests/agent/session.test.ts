@@ -105,13 +105,17 @@ describe("AgentSession", () => {
     const session = await open("s2", provider);
     await session.request("prompt", { message: "hi" });
     const busy = await session.request("get_state");
-    expect(busy).toMatchObject({ success: true, data: { isStreaming: true, sessionId: "s2" } });
+    expect(busy).toMatchObject({
+      success: true,
+      data: { isStreaming: true, operation: "prompt", sessionId: "s2" },
+    });
     expect((await session.request("prompt", { message: "again" })).success).toBe(false);
     await untilSettled(session);
     const idle = await session.request("get_state");
     expect(idle.data).toMatchObject({
       model: { provider: "fake", id: "m" },
       isStreaming: false,
+      operation: null,
       messageCount: 2,
     });
     const stats = await session.request("get_session_stats");
