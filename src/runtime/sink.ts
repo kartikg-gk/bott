@@ -23,4 +23,6 @@ export interface Sink {
   send(route: Route, text: string): Promise<void>;
   event(route: Route, e: SessionEvent): void;
   approval(route: Route, card: ApprovalCard): Promise<void>;
+  /** Told once a shown approval is settled, however it was settled. */
+  resolved?(route: Route, card: ApprovalCard, allow: boolean): Promise<void>;
 }

@@ -476,6 +476,7 @@ export class Dispatcher {
     this.cards.delete(id);
     clearTimeout(open.timer);
     await this.store.decide(id, allow, source).catch(() => {});
+    await this.sink.resolved?.(open.route, open.card, allow).catch(() => {});
   }
 
   private async forward(
