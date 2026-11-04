@@ -21,6 +21,11 @@ export const PROXY_SECRET_VARIABLE = "BOTT_PROXY_SECRET";
 export const PROXY_HEADER = "x-bott-proxy";
 const PROXY_SECRET = /^[A-Za-z0-9_-]{43,128}$/;
 
+/** Served at "/" until the interface is designed; the API under /api is complete without it. */
+export const PLACEHOLDER_PAGE =
+  '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>bott</title></head>' +
+  "<body><p>The interface for this server is on its way. The API is running.</p></body></html>";
+
 /** One person on this machine, unlocked with a bearer token. */
 export interface TokenAuth {
   mode: "token";
@@ -94,7 +99,7 @@ export function createApp(opts: AppOptions): (request: Request) => Promise<Respo
   (opts.apps ?? NO_APPS).routes(router);
 
   const page = () =>
-    new Response(opts.page ?? "", {
+    new Response(opts.page ?? PLACEHOLDER_PAGE, {
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     });
 

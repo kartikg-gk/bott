@@ -14,6 +14,7 @@ describe.each(backends)("%s backend", (kind) => {
     const { handler, call } = h.app(await h.gateway(gated([])));
     const page = await handler(new Request("http://127.0.0.1/"));
     expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
     expect(await page.text()).toContain("page");
     const refused = await call("/api/messages", { headers: { authorization: "Bearer wrong" } });
     expect(refused.status).toBe(401);
@@ -119,4 +120,14 @@ describe.each(backends)("%s backend", (kind) => {
     expect(tasks[0]).toMatchObject({ status: "running", bot: chief.name });
     expect(String(tasks[0]?.goal)).toHaveLength(200);
   });
+});
+
+it("serves a placeholder at the root until the interface exists", async () => {
+  const { createApp, PLACEHOLDER_PAGE } = await import("../../src/web/app.ts");
+  const handler = createApp({
+    auth: { mode: "token", token: "t".repeat(20), gateway: {} as never },
+  });
+  const page = await handler(new Request("http://127.0.0.1/"));
+  expect(await page.text()).toBe(PLACEHOLDER_PAGE);
+  expect(PLACEHOLDER_PAGE).toContain("on its way");
 });
