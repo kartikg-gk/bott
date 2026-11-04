@@ -69,7 +69,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
   });
 
-  async function setup(executor: "local" | "docker") {
+  async function setup(executor: "local" | "docker" | "daytona") {
     const { db } = database(kind);
     open.push(db);
     const store = await Store.open(db, "main", { clock: () => 1_800_000_000 });
@@ -83,7 +83,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       model: "m",
       idleSeconds: 60,
       computer: computerSettings(
-        executor === "docker" ? { executor, dockerImage: "debian:bookworm-slim" } : {},
+        executor === "docker" ? { executor, dockerImage: "debian:bookworm-slim" } : { executor },
       ),
     };
     const seen: ProviderRequest[] = [];
@@ -96,6 +96,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   it("only this machine is unsandboxed", async () => {
     expect((await setup("local")).sessions.sandboxed).toBe(false);
     expect((await setup("docker")).sessions.sandboxed).toBe(true);
+    expect((await setup("daytona")).sessions.sandboxed).toBe(true);
   });
 
   it("gives each bot one computer and shows where its notes are", async () => {

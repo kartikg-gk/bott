@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { SANDBOX_MEMORY, SANDBOX_ROOT } from "../../src/computers/daytona.ts";
+import { CONTAINER_ROOT, MEMORY_MOUNT } from "../../src/computers/docker.ts";
+import { makeComputer } from "../../src/computers/index.ts";
 import { computerName, computerSettings } from "../../src/computers/settings.ts";
 
 describe("computer settings", () => {
@@ -36,5 +39,30 @@ describe("computer settings", () => {
   it("name each bot's computer from the instance and bot", () => {
     expect(computerName("main", "0123456789abcdef")).toBe("bott-bot-main-0123456789ab");
     expect(computerName("Team One/x!", "abc")).toBe("bott-bot-team-one-abc");
+  });
+});
+
+describe("making a bot's computer", () => {
+  const place = {
+    instance: "main",
+    bot: { id: "abc", chief: false },
+    hostRoot: "/host/work",
+    memoryDir: "/host/memory",
+  };
+
+  it("picks the computer the settings name, without starting it", () => {
+    expect(makeComputer(computerSettings({}), place)).toMatchObject({
+      root: "/host/work",
+      memoryPath: "/host/memory",
+    });
+    const docker = computerSettings({ executor: "docker", dockerImage: "img" });
+    expect(makeComputer(docker, place)).toMatchObject({
+      root: CONTAINER_ROOT,
+      memoryPath: MEMORY_MOUNT,
+    });
+    expect(makeComputer(computerSettings({ executor: "daytona" }), place)).toMatchObject({
+      root: SANDBOX_ROOT,
+      memoryPath: SANDBOX_MEMORY,
+    });
   });
 });
