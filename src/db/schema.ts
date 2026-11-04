@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import type { Database } from "./database.js";
+import { SCHEMA_SQL } from "./schemaSql.js";
 import { SqliteDatabase } from "./sqlite.js";
 
 export const SCHEMA_VERSION = 21;
@@ -7,11 +7,9 @@ export const SCHEMA_VERSION = 21;
 const MARKER = `gateway-${SCHEMA_VERSION}`;
 const MIGRATIONS_TABLE = "CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY)";
 
-/** The create statements in schema.sql. Each starts at the left edge with CREATE and ends with ";". */
+/** The create statements, one string each. */
 function statements(): string[] {
-  const text = readFileSync(new URL("./schema.sql", import.meta.url), "utf8");
-  return text
-    .split(/;\r?\n(?=CREATE )/)
+  return SCHEMA_SQL.split(/;\r?\n(?=CREATE )/)
     .map((statement) => statement.trim().replace(/;$/, ""))
     .filter((statement) => statement.length > 0);
 }

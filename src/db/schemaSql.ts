@@ -1,4 +1,8 @@
-CREATE TABLE instances(id TEXT PRIMARY KEY, bot_id INTEGER);
+/**
+ * The create statements for schema 21, kept as text in the module so a bundled server has
+ * them without reading a file. Each starts at the left edge with CREATE and ends with ";".
+ */
+export const SCHEMA_SQL = `CREATE TABLE instances(id TEXT PRIMARY KEY, bot_id INTEGER);
 CREATE TABLE poll_state(instance TEXT PRIMARY KEY, offset INTEGER NOT NULL);
 CREATE TABLE session_status(
       instance TEXT, session TEXT, data TEXT, PRIMARY KEY(instance,session));
@@ -105,3 +109,4 @@ CREATE TRIGGER cancel_queued_wakeups AFTER UPDATE OF status,spec ON jobs
                     UPDATE job_wakeups SET status='cancelled',finished=unixepoch()
                     WHERE instance=NEW.instance AND job=NEW.id AND status='queued';
                 END;
+`;

@@ -13,7 +13,7 @@ export const VALIDATION_LIMIT = 5;
 const FLOW_CAP = 1024;
 
 /**
- * The account tables. They live outside schema.sql because they may sit in their own file; the
+ * The account tables. They live outside the main schema because they may sit in their own file; the
  * columns match what is already stored so existing account files and databases open as they are.
  */
 const TABLES = [
