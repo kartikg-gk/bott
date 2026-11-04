@@ -187,6 +187,9 @@ export class FakeDaytona {
       if (action.startsWith("/autoarchive/")) {
         sandbox.autoArchiveInterval = Number(action.split("/")[2]);
       }
+      if (action.startsWith("/autostop/")) {
+        sandbox.autoStopInterval = Number(action.split("/")[2]);
+      }
       if (action === "/network-settings") {
         Object.assign(sandbox, JSON.parse(body.toString("utf8")) as Partial<FakeSandbox>);
       }

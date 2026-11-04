@@ -128,6 +128,17 @@ describe("daytona computer", () => {
     });
   });
 
+  it("sets an existing sandbox to stop itself when idle, like a new one", async () => {
+    fake.add({
+      name: "bott-bot-main-abc",
+      state: "started",
+      networkBlockAll: false,
+      autoStopInterval: 0,
+    });
+    await computer().run("true", opts());
+    expect(fake.sandboxes.get("bott-bot-main-abc")?.autoStopInterval).toBe(IDLE_MINUTES);
+  });
+
   it("starts again after the sandbox stopped itself while idle", async () => {
     const ws = computer();
     await ws.run("true", opts());

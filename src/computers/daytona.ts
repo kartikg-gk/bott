@@ -106,6 +106,8 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
         labels: { bott: opts.instance },
       });
     }
+    // A sandbox made earlier, or changed by hand, gets the same idle and archive times as a new one.
+    await box.setAutostopInterval(IDLE_MINUTES);
     await box.setAutoArchiveInterval(opts.archiveMinutes);
     const made = await exec(
       box,
