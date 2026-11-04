@@ -158,6 +158,41 @@ describe("runAgentLoop", () => {
     expect(result.content).toEqual([{ type: "text", text: "not allowed here" }]);
   });
 
+  it("approval hook failure blocks only that call", async () => {
+    const ran: number[] = [];
+    const t = tool("look", true, async (input) => {
+      const n = (input as { n: number }).n;
+      ran.push(n);
+      return { content: [{ type: "text", text: `saw ${n}` }] };
+    });
+    const provider = fakeProvider([
+      reply([call("a", "look", { n: 1 }), call("b", "look", { n: 2 })], "tool_calls"),
+      reply([{ type: "text", text: "ok" }]),
+    ]);
+    const events = await collect(
+      runAgentLoop({
+        ...base,
+        provider,
+        messages: [user("go")],
+        tools: [t],
+        beforeToolCall: async (c) => {
+          if (c.id === "a") throw new Error("hook down");
+          return { allow: true };
+        },
+      }),
+    );
+    const results = toolResults(events);
+    expect(results.map((r) => r.callId)).toEqual(["a", "b"]);
+    expect(nth(results, 0).isError).toBe(true);
+    expect(nth(results, 0).content).toEqual([
+      { type: "text", text: "Approval check failed: hook down" },
+    ]);
+    expect(nth(results, 1).isError).toBe(false);
+    expect(ran).toEqual([2]);
+    expect(events.some((e) => e.type === "turn_end")).toBe(true);
+    expect(events.at(-1)?.type).toBe("agent_end");
+  });
+
   it("unknown tool and bad input become error results", async () => {
     const t = tool("echo", true, async () => ({ content: [{ type: "text", text: "x" }] }));
     const provider = fakeProvider([

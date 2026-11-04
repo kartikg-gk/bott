@@ -250,7 +250,15 @@ async function outputOf(
     return errorOutput(`Invalid input for ${call.name}: ${parsed.error.message}`);
   }
   if (opts.beforeToolCall) {
-    const verdict = await opts.beforeToolCall(call);
+    let verdict: Awaited<ReturnType<BeforeToolCall>>;
+    try {
+      verdict = await opts.beforeToolCall(call);
+    } catch (err) {
+      // A broken approval check denies only this call; siblings still run.
+      return errorOutput(
+        `Approval check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     if (!verdict.allow) return errorOutput(verdict.reason);
   }
   if (signal.aborted) return errorOutput(ABORTED_TEXT);
