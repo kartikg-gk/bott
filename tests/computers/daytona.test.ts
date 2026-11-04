@@ -198,6 +198,12 @@ describe("daytona files", () => {
         return { exitCode: 0, result: args.map((a) => `${answer(a)}\0`).join("") };
       }
       if (script === SCRIPTS.folder) return { exitCode: 0, result: "" };
+      if (script === SCRIPTS.size) {
+        // One stored file claims to be larger than the service is asked to hand over.
+        const path = args[0] as string;
+        const size = path.endsWith("big.bin") ? 70_000_000 : (stored.get(path)?.length ?? 0);
+        return { exitCode: 0, result: `${size} 1800000000\n` };
+      }
       return { exitCode: 1, result: "unexpected script" };
     };
     const tools = fileTools(computer());
@@ -221,5 +227,18 @@ describe("daytona files", () => {
     );
     const folder = await run("Read", { path: "notes" });
     expect(textOf(folder.content)).toBe(`Cannot read notes: ${SANDBOX_ROOT}/notes is not a file`);
+
+    stored?.set(`${SANDBOX_ROOT}/big.bin`, Buffer.from("x"));
+    const seen = fake.calls().length;
+    const big = await run("Read", { path: "big.bin" });
+    expect(textOf(big.content)).toBe(
+      `Cannot read big.bin: ${SANDBOX_ROOT}/big.bin is over 64 MB, more than a file read takes`,
+    );
+    expect(
+      fake
+        .calls()
+        .slice(seen)
+        .some((c) => c.includes("/files/bulk-download")),
+    ).toBe(false);
   });
 });

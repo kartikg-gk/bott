@@ -1,7 +1,12 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Daytona, Sandbox } from "@daytonaio/sdk";
-import type { RunOptions, RunResult, Workspace } from "../agent/tools/workspace.ts";
+import {
+  FileProblem,
+  type RunOptions,
+  type RunResult,
+  type Workspace,
+} from "../agent/tools/workspace.ts";
 import { ComputerError } from "./docker.ts";
 import { posixFiles, type Shell } from "./posix.ts";
 import { quote } from "./shell.ts";
@@ -16,6 +21,8 @@ export const IDLE_MINUTES = 15;
 const EXEC_GRACE_MS = 10_000;
 const PREPARE_SECONDS = 60;
 const FILE_SECONDS = 30;
+/** The most a file read hands over, the same as on Docker. */
+const READ_LIMIT = 64_000_000;
 
 export interface DaytonaOptions {
   name: string;
@@ -153,6 +160,11 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
     // Contents travel through the file service, so bytes arrive as they are.
     async readFile(path) {
       await files.mustBeFile(path);
+      // The file service hands over a whole file at once, so its size is asked first.
+      const found = await files.stat(path);
+      if (found && found.size > READ_LIMIT) {
+        throw new FileProblem("failed", `${path} is over 64 MB, more than a file read takes`);
+      }
       return (await ready()).fs.downloadFile(path);
     },
     async writeFile(path, data) {
