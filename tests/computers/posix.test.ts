@@ -41,69 +41,74 @@ const SHELLS = [
   ["a shell without realpath or find", "realpath() { return 127; }; find() { return 127; }; "],
 ] as const;
 
-describe.skipIf(!shellReady()).each(SHELLS)("files reached through %s", (_name, before) => {
-  const sh = shellWith(before);
+// Every check starts several shells, which is slow on some machines and slower under load.
+describe.skipIf(!shellReady()).each(SHELLS)(
+  "files reached through %s",
+  { timeout: 30_000 },
+  (_name, before) => {
+    const sh = shellWith(before);
 
-  beforeEach(async () => {
-    base = mkdtempSync(join(tmpdir(), "posix-"));
-    mkdirSync(join(base, "work"));
-    mkdirSync(join(base, "elsewhere"));
-    writeFileSync(join(base, "elsewhere", "secret.txt"), "s");
-    // The shell's own name for the folder, which may differ from this process's.
-    const named = await sh('cd "$1" && pwd', [join(base, "work")]);
-    root = named.stdout.toString("utf8").trim();
-    files = posixFiles(sh, root);
-  });
-  afterEach(() => rmSync(base, { recursive: true, force: true }));
+    beforeEach(async () => {
+      base = mkdtempSync(join(tmpdir(), "posix-"));
+      mkdirSync(join(base, "work"));
+      mkdirSync(join(base, "elsewhere"));
+      writeFileSync(join(base, "elsewhere", "secret.txt"), "s");
+      // The shell's own name for the folder, which may differ from this process's.
+      const named = await sh('cd "$1" && pwd', [join(base, "work")]);
+      root = named.stdout.toString("utf8").trim();
+      files = posixFiles(sh, root);
+    });
+    afterEach(() => rmSync(base, { recursive: true, force: true }));
 
-  it("resolves paths inside the root and refuses the rest", async () => {
-    expect(await files.realpath("a/b.txt")).toBe(`${root}/a/b.txt`);
-    expect(await files.realpath(".")).toBe(root);
-    expect(await files.realpath("../elsewhere/secret.txt")).toBeNull();
-    expect(await files.realpath("/etc/passwd")).toBeNull();
-    expect(await files.realpath("a/../../x")).toBeNull();
-  });
+    it("resolves paths inside the root and refuses the rest", async () => {
+      expect(await files.realpath("a/b.txt")).toBe(`${root}/a/b.txt`);
+      expect(await files.realpath(".")).toBe(root);
+      expect(await files.realpath("../elsewhere/secret.txt")).toBeNull();
+      expect(await files.realpath("/etc/passwd")).toBeNull();
+      expect(await files.realpath("a/../../x")).toBeNull();
+    });
 
-  it("follows links out of the root to refuse them", async () => {
-    try {
-      symlinkSync(join(base, "elsewhere"), join(base, "work", "link"), "junction");
-    } catch {
-      return;
-    }
-    expect(await files.realpath("link/secret.txt")).toBeNull();
-    expect(await files.realpath("link/new.txt")).toBeNull();
-  });
+    it("follows links out of the root to refuse them", async () => {
+      try {
+        symlinkSync(join(base, "elsewhere"), join(base, "work", "link"), "junction");
+      } catch {
+        return;
+      }
+      expect(await files.realpath("link/secret.txt")).toBeNull();
+      expect(await files.realpath("link/new.txt")).toBeNull();
+    });
 
-  it("writes with parents, reads back, and says what is wrong", async () => {
-    const file = (await files.realpath("deep/er/note.txt")) as string;
-    await files.writeFile(file, "one\ntwo\n");
-    expect((await files.readFile(file)).toString()).toBe("one\ntwo\n");
-    await files.writeFile(file, Buffer.from([0, 1, 255]));
-    expect([...(await files.readFile(file))]).toEqual([0, 1, 255]);
+    it("writes with parents, reads back, and says what is wrong", async () => {
+      const file = (await files.realpath("deep/er/note.txt")) as string;
+      await files.writeFile(file, "one\ntwo\n");
+      expect((await files.readFile(file)).toString()).toBe("one\ntwo\n");
+      await files.writeFile(file, Buffer.from([0, 1, 255]));
+      expect([...(await files.readFile(file))]).toEqual([0, 1, 255]);
 
-    await expect(files.readFile(`${root}/nope.txt`)).rejects.toMatchObject({ reason: "missing" });
-    await expect(files.readFile(`${root}/deep`)).rejects.toMatchObject({ reason: "kind" });
-  });
+      await expect(files.readFile(`${root}/nope.txt`)).rejects.toMatchObject({ reason: "missing" });
+      await expect(files.readFile(`${root}/deep`)).rejects.toMatchObject({ reason: "kind" });
+    });
 
-  it("stats and lists", async () => {
-    await files.writeFile(`${root}/b.txt`, "12345");
-    await files.writeFile(`${root}/a/x.txt`, "");
-    expect(await files.stat(`${root}/b.txt`)).toMatchObject({ kind: "file", size: 5 });
-    expect(await files.stat(`${root}/a`)).toMatchObject({ kind: "directory" });
-    expect(await files.stat(`${root}/missing`)).toBeNull();
-    expect(await files.list(root)).toEqual([
-      { name: "a", kind: "directory" },
-      { name: "b.txt", kind: "file" },
-    ]);
-    await files.writeFile(`${root}/a/.hidden`, "h");
-    expect(await files.list(`${root}/a`)).toEqual([
-      { name: ".hidden", kind: "file" },
-      { name: "x.txt", kind: "file" },
-    ]);
-    await expect(files.list(`${root}/b.txt`)).rejects.toMatchObject({ reason: "kind" });
-    await expect(files.list(`${root}/none`)).rejects.toMatchObject({ reason: "missing" });
-  });
-});
+    it("stats and lists", async () => {
+      await files.writeFile(`${root}/b.txt`, "12345");
+      await files.writeFile(`${root}/a/x.txt`, "");
+      expect(await files.stat(`${root}/b.txt`)).toMatchObject({ kind: "file", size: 5 });
+      expect(await files.stat(`${root}/a`)).toMatchObject({ kind: "directory" });
+      expect(await files.stat(`${root}/missing`)).toBeNull();
+      expect(await files.list(root)).toEqual([
+        { name: "a", kind: "directory" },
+        { name: "b.txt", kind: "file" },
+      ]);
+      await files.writeFile(`${root}/a/.hidden`, "h");
+      expect(await files.list(`${root}/a`)).toEqual([
+        { name: ".hidden", kind: "file" },
+        { name: "x.txt", kind: "file" },
+      ]);
+      await expect(files.list(`${root}/b.txt`)).rejects.toMatchObject({ reason: "kind" });
+      await expect(files.list(`${root}/none`)).rejects.toMatchObject({ reason: "missing" });
+    });
+  },
+);
 
 describe("a computer missing a tool file access needs", () => {
   it("is named in the error, and the check runs again after a failure", async () => {

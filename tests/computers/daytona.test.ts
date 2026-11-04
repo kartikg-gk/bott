@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { fileTools } from "../../src/agent/tools/files.ts";
 import type { RunOptions, Workspace } from "../../src/agent/tools/workspace.ts";
 import { textOf } from "../../src/agent/transcript.ts";
@@ -17,6 +17,12 @@ import { FakeDaytona } from "../support/fakeDaytona.ts";
 let fake: FakeDaytona;
 let base: string;
 const made: Workspace[] = [];
+
+// The SDK loads on first use and takes seconds on a busy machine; load it once here, so each
+// test measures only what it checks.
+beforeAll(async () => {
+  await import("@daytonaio/sdk");
+}, 60_000);
 
 beforeEach(async () => {
   fake = new FakeDaytona();
