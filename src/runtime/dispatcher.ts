@@ -91,6 +91,14 @@ interface OpenCard {
   timer: NodeJS.Timeout | undefined;
 }
 
+/** Lets another part add context above a prompt and hear about each completed exchange. */
+export interface ExchangeHooks {
+  /** Text placed above the message; empty for none. */
+  before(route: Route, item: InboxItem): Promise<string>;
+  /** Called once the answer to a completed run has been delivered or failed to be. */
+  after(route: Route, item: InboxItem, answer: string): void;
+}
+
 /** Turns waiting inbox messages into runs, one at a time per route, and delivers each answer. */
 export class Dispatcher {
   private readonly active = new Map<number, Active>();
@@ -98,14 +106,16 @@ export class Dispatcher {
   /** Approval work for cards no run is waiting on. */
   private readonly loose = new Set<Promise<void>>();
   private readonly workers: number;
+  private readonly exchange: ExchangeHooks | undefined;
   private ticking: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly store: Store,
     private readonly sessions: SessionManager,
     private readonly sink: Sink,
-    opts: { workers?: number | undefined } = {},
+    opts: { workers?: number | undefined; exchange?: ExchangeHooks } = {},
   ) {
+    this.exchange = opts.exchange;
     const workers = opts.workers ?? Number.POSITIVE_INFINITY;
     if (!(workers >= 1)) throw new Error("workers must be at least 1");
     this.workers = workers;
@@ -270,7 +280,8 @@ export class Dispatcher {
         await this.store.mark(item, "cancelled");
         return;
       }
-      const answer = await this.sessions.prompt(route, item.text, {
+      const above = (await this.exchange?.before(route, item).catch(() => "")) ?? "";
+      const answer = await this.sessions.prompt(route, above + item.text, {
         onEvent: (e, source) => this.observe(active, e, source),
       });
       await this.settleChores(active);
@@ -282,6 +293,13 @@ export class Dispatcher {
         await this.store.mark(item, answer.outcome satisfies InboxStatus);
       } catch {
         await this.store.mark(item, "delivery_failed");
+      }
+      if (answer.outcome === "completed") {
+        try {
+          this.exchange?.after(route, item, text);
+        } catch {
+          // Whatever listens must not change how the run ends.
+        }
       }
     } catch (err) {
       if (err instanceof BotBusy) {
