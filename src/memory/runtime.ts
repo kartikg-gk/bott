@@ -85,14 +85,19 @@ async function forgetSession(store: Store, botId: string): Promise<void> {
 
 const RECALL_SECONDS = 2;
 
-/** The work's result, or "" once `ms` pass first; the work is left to finish on its own. */
-function withinTime(work: Promise<string>, ms: number): Promise<string> {
+/** The work's result, or "" once `ms` pass first; the work is then told to stop. */
+function withinTime(work: (signal: AbortSignal) => Promise<string>, ms: number): Promise<string> {
+  const stop = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<string>((resolve) => {
-    timer = setTimeout(() => resolve(""), ms);
+    timer = setTimeout(() => {
+      stop.abort();
+      resolve("");
+    }, ms);
   });
-  work.catch(() => {});
-  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+  const doing = work(stop.signal);
+  doing.catch(() => {});
+  return Promise.race([doing, late]).finally(() => clearTimeout(timer));
 }
 
 export interface MemoryRuntimeOptions {
@@ -126,7 +131,7 @@ export class MemoryRuntime implements ExchangeHooks {
       const scope = await this.scope(route, item);
       if (!scope || !this.opts.config.enabled) return "";
       return await withinTime(
-        this.opts.memory.recall(scope, item.text),
+        (signal) => this.opts.memory.recall(scope, item.text, signal),
         (this.opts.recallSeconds ?? RECALL_SECONDS) * 1000,
       );
     } catch {

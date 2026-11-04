@@ -70,17 +70,17 @@ export class Memory {
   }
 
   /** Best matches first, keeping only those the rows still mark active. */
-  async search(scope: Scope, text: string, limit?: number): Promise<Fact[]> {
+  async search(scope: Scope, text: string, limit?: number, signal?: AbortSignal): Promise<Fact[]> {
     // Searches never wait behind a sync, which may be copying many facts over the network.
-    const found = await this.index.search(text, scope, limit ?? this.limit, this.floor);
+    const found = await this.index.search(text, scope, limit ?? this.limit, this.floor, signal);
     return this.facts.current(scope, found);
   }
 
   /** The labelled block that goes in front of a message, cut to the token budget; "" if nothing matches. */
-  async recall(scope: Scope, text: string): Promise<string> {
+  async recall(scope: Scope, text: string, signal?: AbortSignal): Promise<string> {
     const lines: string[] = [];
     let used = 0;
-    for (const fact of await this.search(scope, text)) {
+    for (const fact of await this.search(scope, text, undefined, signal)) {
       const truth = fact.kind === "fact" ? "true" : "false";
       const line = `- [${fact.kind}, ${day(fact.created)}, current_truth: ${truth}] ${fact.text}`;
       used += Math.floor(line.length / 4) + 1;

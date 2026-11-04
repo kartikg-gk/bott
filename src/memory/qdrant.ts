@@ -75,9 +75,16 @@ export class QdrantIndex implements VectorIndex {
     await this.client.delete(this.collection, { wait: true, points: [id] });
   }
 
-  async search(text: string, scope: Scope, limit: number, floor: number): Promise<number[]> {
+  async search(
+    text: string,
+    scope: Scope,
+    limit: number,
+    floor: number,
+    signal?: AbortSignal,
+  ): Promise<number[]> {
     if (!(await this.exists())) return [];
-    const [query] = await this.embedder.embed([text]);
+    const [query] = await this.embedder.embed([text], signal);
+    signal?.throwIfAborted();
     if (!query) return [];
     const found = await this.client.query(this.collection, {
       query,

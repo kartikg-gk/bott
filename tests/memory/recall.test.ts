@@ -213,6 +213,24 @@ describe("vectors", () => {
     expect(String(error)).not.toContain("sk-secret");
   });
 
+  it("a request the caller gives up on is stopped", async () => {
+    let reached: AbortSignal | undefined;
+    const embedder = embeddingsEmbedder({
+      apiKey: "sk-secret",
+      model: "emb",
+      fetch: (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          reached = init?.signal ?? undefined;
+          reached?.addEventListener("abort", () => reject(reached?.reason), { once: true });
+        }),
+    });
+    const caller = new AbortController();
+    const asked = embedder.embed(["a"], caller.signal).catch((e: Error) => e);
+    caller.abort();
+    expect(String(await asked)).toContain("Embedding request failed");
+    expect(reached?.aborted).toBe(true);
+  });
+
   it("an embedder without a key refuses to start", () => {
     expect(() => embeddingsEmbedder({ apiKey: "", model: "emb" })).toThrow(
       "Memory needs OPENAI_API_KEY for embeddings",

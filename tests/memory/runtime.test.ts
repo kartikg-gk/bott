@@ -234,14 +234,22 @@ describe("recall that takes too long", () => {
     await Promise.all(open.splice(0).map((db) => db.close()));
   });
 
-  /** Embeds normally until a text containing `slow` arrives, which never gets an answer. */
+  /**
+   * Embeds normally until a text containing `slow` arrives, which gets no answer until the
+   * caller gives up on it.
+   */
   function stallingEmbedder() {
     const inner = fakeEmbedder();
     return {
       slow: "\u0000",
-      async embed(texts: string[]): Promise<number[][]> {
-        if (texts.some((t) => t.includes(this.slow))) return new Promise(() => {});
-        return inner.embed(texts);
+      stalled: [] as AbortSignal[],
+      async embed(texts: string[], signal?: AbortSignal): Promise<number[][]> {
+        if (!texts.some((t) => t.includes(this.slow))) return inner.embed(texts);
+        const given = signal ?? new AbortController().signal;
+        this.stalled.push(given);
+        return new Promise((_resolve, reject) => {
+          given.addEventListener("abort", () => reject(new Error("stopped")), { once: true });
+        });
       },
     };
   }
@@ -276,6 +284,9 @@ describe("recall that takes too long", () => {
     const started = Date.now();
     expect(await runtime.before(route, item)).toBe("");
     expect(Date.now() - started).toBeLessThan(1000);
+    // The request recall gave up on is stopped, not left running on its own.
+    expect(embedder.stalled).toHaveLength(1);
+    expect(embedder.stalled[0]?.aborted).toBe(true);
   });
 
   it("a search does not wait behind a sync that is stuck", async () => {

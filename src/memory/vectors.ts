@@ -1,8 +1,8 @@
 import type { Scope } from "./facts.js";
 
-/** Turns text into vectors; one vector per text, in order. */
+/** Turns text into vectors; one vector per text, in order. `signal` stops the request. */
 export interface Embedder {
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[], signal?: AbortSignal): Promise<number[][]>;
 }
 
 /** Where facts are found by meaning. Everything in it can be rebuilt from the rows. */
@@ -11,8 +11,14 @@ export interface VectorIndex {
   open(): Promise<boolean>;
   put(id: number, text: string, scope: Scope): Promise<void>;
   remove(id: number): Promise<void>;
-  /** Fact numbers at least `floor` similar to the text, best first. */
-  search(text: string, scope: Scope, limit: number, floor: number): Promise<number[]>;
+  /** Fact numbers at least `floor` similar to the text, best first; `signal` gives up on it. */
+  search(
+    text: string,
+    scope: Scope,
+    limit: number,
+    floor: number,
+    signal?: AbortSignal,
+  ): Promise<number[]>;
   close(): Promise<void>;
 }
 
@@ -56,9 +62,15 @@ export class CosineIndex implements VectorIndex {
     this.points.delete(id);
   }
 
-  async search(text: string, scope: Scope, limit: number, floor: number): Promise<number[]> {
+  async search(
+    text: string,
+    scope: Scope,
+    limit: number,
+    floor: number,
+    signal?: AbortSignal,
+  ): Promise<number[]> {
     if (this.points.size === 0) return [];
-    const [query] = await this.embedder.embed([text]);
+    const [query] = await this.embedder.embed([text], signal);
     if (!query) return [];
     const scored: [number, number][] = [];
     for (const [id, point] of this.points) {
@@ -92,14 +104,15 @@ export function embeddingsEmbedder(opts: {
   const url = `${(opts.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "")}/embeddings`;
   const send = opts.fetch ?? fetch;
   return {
-    async embed(texts) {
+    async embed(texts, signal) {
+      const limit = AbortSignal.timeout(EMBED_TIMEOUT_MS);
       let response: Response;
       try {
         response = await send(url, {
           method: "POST",
           headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ model: opts.model, input: texts }),
-          signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+          signal: signal ? AbortSignal.any([limit, signal]) : limit,
         });
       } catch (error) {
         throw new Error(`Embedding request failed: ${(error as Error).name}`);
