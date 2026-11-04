@@ -376,6 +376,16 @@ describe("abort and secrets", () => {
           throw new TypeError(`connect failed for Bearer ${key}`);
         },
       }),
+      // An error the server sends inside the stream may echo the key too.
+      anthropicProvider({
+        apiKey: key,
+        fetch: fetchReturning(() =>
+          sse(
+            'data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":1}}}\n\n' +
+              `data: {"type":"error","error":{"type":"api_error","message":"key ${key} refused"}}\n\n`,
+          ),
+        ),
+      }),
     ];
     for (const provider of cases) {
       const events = await collect(provider);

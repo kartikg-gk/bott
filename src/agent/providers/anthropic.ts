@@ -1,5 +1,5 @@
 import { type Block, emptyUsage, type StopReason, type TranscriptEntry } from "../transcript.ts";
-import { endedEarly, isAbort, openStream, sseData, toolSchema } from "./http.ts";
+import { endedEarly, isAbort, openStream, redact, sseData, toolSchema } from "./http.ts";
 import type { FetchFn, ModelProvider, ProviderRequest, StreamEvent } from "./types.ts";
 
 export interface AnthropicOptions {
@@ -226,7 +226,11 @@ export function anthropicProvider(options: AnthropicOptions): ModelProvider {
               const err = (event.error ?? {}) as Json;
               yield {
                 type: "error",
-                message: `${label} stream error: ${String(err.message ?? err.type ?? "unknown")}`,
+                // The server writes this text, so it is cleaned like any other error from it.
+                message: redact(
+                  `${label} stream error: ${String(err.message ?? err.type ?? "unknown")}`,
+                  options.apiKey,
+                ),
                 retryable: content.length === 0 && err.type === "overloaded_error",
               };
               return;
