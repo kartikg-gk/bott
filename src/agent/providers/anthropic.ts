@@ -35,8 +35,14 @@ function toMessages(entries: TranscriptEntry[]): Json[] {
     if (entry.role === "user") {
       push("user", textBlocks(entry.content));
     } else if (entry.role === "assistant") {
-      // Thinking is not replayed: the signature the API wants back is not kept.
+      // Signed thinking goes back unchanged and in order; unsigned thinking (from an aborted
+      // stream) would be rejected by the API, so it is left out.
       const content = entry.content.flatMap((b): Json[] => {
+        if (b.type === "thinking")
+          return b.signature
+            ? [{ type: "thinking", thinking: b.text, signature: b.signature }]
+            : [];
+        if (b.type === "redacted_thinking") return [{ type: "redacted_thinking", data: b.data }];
         if (b.type === "text") return b.text ? [{ type: "text", text: b.text }] : [];
         if (b.type === "call")
           return [{ type: "tool_use", id: b.id, name: b.name, input: b.input }];
@@ -123,7 +129,10 @@ export function anthropicProvider(options: AnthropicOptions): ModelProvider {
         return;
       }
 
-      const open = new Map<number, { type: string; id?: string; name?: string; text: string }>();
+      const open = new Map<
+        number,
+        { type: string; id?: string; name?: string; text: string; signature: string }
+      >();
       let stop: StopReason | undefined;
       try {
         yield { type: "start", model };
@@ -152,7 +161,8 @@ export function anthropicProvider(options: AnthropicOptions): ModelProvider {
                 type: String(block.type),
                 id: block.id as string | undefined,
                 name: block.name as string | undefined,
-                text: "",
+                text: block.type === "redacted_thinking" ? String(block.data ?? "") : "",
+                signature: "",
               });
               break;
             }
@@ -168,6 +178,8 @@ export function anthropicProvider(options: AnthropicOptions): ModelProvider {
                 const text = String(delta.thinking ?? "");
                 slot.text += text;
                 yield { type: "thinking_delta", text };
+              } else if (delta.type === "signature_delta") {
+                slot.signature += String(delta.signature ?? "");
               } else if (delta.type === "input_json_delta") {
                 slot.text += String(delta.partial_json ?? "");
               }
@@ -179,7 +191,13 @@ export function anthropicProvider(options: AnthropicOptions): ModelProvider {
               if (!slot) break;
               if (slot.type === "text") content.push({ type: "text", text: slot.text });
               else if (slot.type === "thinking")
-                content.push({ type: "thinking", text: slot.text });
+                content.push({
+                  type: "thinking",
+                  text: slot.text,
+                  ...(slot.signature ? { signature: slot.signature } : {}),
+                });
+              else if (slot.type === "redacted_thinking")
+                content.push({ type: "redacted_thinking", data: slot.text });
               else if (slot.type === "tool_use") {
                 let input: unknown = {};
                 try {

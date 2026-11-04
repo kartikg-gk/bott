@@ -1,6 +1,7 @@
 export type Block =
   | { type: "text"; text: string }
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; signature?: string }
+  | { type: "redacted_thinking"; data: string }
   | { type: "call"; id: string; name: string; input: unknown };
 
 export interface Usage {

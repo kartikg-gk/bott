@@ -144,7 +144,7 @@ export function openAICompatibleProvider(options: OpenAICompatibleOptions): Mode
             if (typeof fn.arguments === "string") slot.args += fn.arguments;
             calls.set(index, slot);
           }
-          if (typeof choice.finish_reason === "string") {
+          if (typeof choice.finish_reason === "string" && choice.finish_reason && !callsEmitted) {
             stop = STOP[choice.finish_reason] ?? "end";
             if (text) content.push({ type: "text", text });
             for (const [, slot] of [...calls].sort((a, b) => a[0] - b[0])) {

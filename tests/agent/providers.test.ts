@@ -85,7 +85,7 @@ describe("anthropic", () => {
     if (end?.type !== "end") throw new Error("no end");
     expect(end.entry.stop).toBe("tool_calls");
     expect(end.entry.content).toEqual([
-      { type: "thinking", text: "Let me check the file." },
+      { type: "thinking", text: "Let me check the file.", signature: "sig" },
       { type: "text", text: "Reading it now." },
       { type: "call", id: "toolu_01", name: "read_file", input: { path: "a.txt" } },
     ]);
@@ -383,6 +383,102 @@ describe("abort and secrets", () => {
       expect(error?.type).toBe("error");
       expect(JSON.stringify(events)).not.toContain(key);
     }
+  });
+});
+
+describe("thinking replay", () => {
+  const replayBody = async (stream: string) => {
+    const first = await collect(
+      anthropicProvider({ apiKey: "k", fetch: fetchReturning(() => sse(stream)) }),
+    );
+    const end = first.at(-1);
+    if (end?.type !== "end") throw new Error("no end");
+    let body: { messages: Array<{ role: string; content: unknown[] }> } | undefined;
+    await collect(
+      anthropicProvider({
+        apiKey: "k",
+        fetch: async (_url, init) => {
+          body = JSON.parse(String(init?.body));
+          return sse(
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+          );
+        },
+      }),
+      request({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          end.entry,
+          {
+            role: "tool",
+            callId: "toolu_01",
+            name: "read_file",
+            content: [{ type: "text", text: "data" }],
+            isError: false,
+          },
+        ],
+      }),
+    );
+    return { entry: end.entry, body };
+  };
+
+  it("anthropic keeps thinking signatures for replay", async () => {
+    const { entry, body } = await replayBody(fixture("anthropic-reply.txt"));
+    expect(entry.content[0]).toEqual({
+      type: "thinking",
+      text: "Let me check the file.",
+      signature: "sig",
+    });
+    expect(body?.messages[1]?.content).toEqual([
+      { type: "thinking", thinking: "Let me check the file.", signature: "sig" },
+      { type: "text", text: "Reading it now." },
+      { type: "tool_use", id: "toolu_01", name: "read_file", input: { path: "a.txt" } },
+    ]);
+  });
+
+  it("redacted thinking survives replay", async () => {
+    const stream =
+      'data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":1}}}\n\n' +
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque"}}\n\n' +
+      'data: {"type":"content_block_stop","index":0}\n\n' +
+      'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01","name":"read_file","input":{}}}\n\n' +
+      'data: {"type":"content_block_stop","index":1}\n\n' +
+      'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}\n\n';
+    const { entry, body } = await replayBody(stream);
+    expect(entry.content[0]).toEqual({ type: "redacted_thinking", data: "opaque" });
+    expect(body?.messages[1]?.content[0]).toEqual({ type: "redacted_thinking", data: "opaque" });
+  });
+
+  it("openai drops thinking on replay", async () => {
+    let body: { messages: unknown[] } | undefined;
+    const provider = openAICompatibleProvider({
+      apiKey: "k",
+      baseUrl: "https://example.test/v1",
+      id: "oai",
+      fetch: async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return sse('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      },
+    });
+    await collect(
+      provider,
+      request({
+        system: "",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", text: "hmm", signature: "s" },
+              { type: "redacted_thinking", data: "x" },
+              { type: "text", text: "answer" },
+            ],
+            model: "m",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            stop: "end",
+          },
+        ],
+      }),
+    );
+    expect(body?.messages).toEqual([{ role: "assistant", content: "answer" }]);
   });
 });
 
