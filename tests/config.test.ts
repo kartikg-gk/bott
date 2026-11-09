@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigError, readConfig, SETTINGS } from "../src/config.ts";
@@ -138,5 +139,45 @@ describe("reading the settings from the environment", () => {
     expect(names).toContain("BOTT_WEB_TOKEN");
     expect(names).toContain("BOTT_MASTER_KEY");
     expect(names).toContain("CLOUDFLARE_D1_DATABASE_ID");
+  });
+});
+
+describe("the example settings file", () => {
+  const example = readFileSync(join(import.meta.dirname, "..", ".env.example"), "utf8");
+  const listed = new Map(
+    example
+      .split("\n")
+      .filter((line) => /^[A-Z][A-Z0-9_]*=/.test(line))
+      .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+  );
+
+  it("lists every setting the server reads, and nothing else", () => {
+    expect([...listed.keys()].sort()).toEqual(SETTINGS.map((setting) => setting.name).sort());
+  });
+
+  it("names every BOTT_ variable the code reads", () => {
+    const named = new Set<string>();
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (path.endsWith(".ts")) {
+          for (const match of readFileSync(path, "utf8").matchAll(/"(BOTT_[A-Z0-9_]+)"/g)) {
+            named.add(match[1] as string);
+          }
+        }
+      }
+    };
+    walk(join(import.meta.dirname, "..", "src"));
+    for (const name of named) expect(listed.has(name), name).toBe(true);
+  });
+
+  it("holds no secret values", () => {
+    for (const name of ["BOTT_WEB_TOKEN", "BOTT_MASTER_KEY", "BOTT_GOOGLE_CLIENT_SECRET"]) {
+      expect(listed.get(name)).toBe("");
+    }
+    for (const [name, value] of listed) {
+      if (/KEY|SECRET|TOKEN/.test(name)) expect(value, name).toBe("");
+    }
   });
 });

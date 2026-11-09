@@ -85,7 +85,7 @@ const OAUTH_APPS = [
 
 /** Every variable the server reads, grouped as the example file lists them. */
 export const SETTINGS: Setting[] = [
-  { name: "BOTT_HOSTED", about: "1 when serving as a hosted function (set for you on Vercel)" },
+  { name: "BOTT_HOSTED", about: "1 when serving as a hosted function; automatic on Vercel" },
   { name: "BOTT_HOST", about: "Address the local server listens on", example: "127.0.0.1" },
   { name: "BOTT_PORT", about: "Port the local server listens on", example: "8765" },
   { name: "BOTT_STATE_DIR", about: "Folder for bot files, sessions and the local database" },
@@ -93,7 +93,7 @@ export const SETTINGS: Setting[] = [
   { name: "BOTT_DATABASE", about: "SQLite file when D1 is not configured" },
   { name: "BOTT_INSTANCE", about: "32 hex characters naming this deployment; required hosted" },
   { name: "BOTT_ACTOR", about: "Person id the page acts for in token mode", example: "1" },
-  { name: "BOTT_AUTH", about: "token (one person, local only) or google", example: "token" },
+  { name: "BOTT_AUTH", about: "token (one person, local only) or google; google when hosted" },
   { name: TOKEN_VARIABLE, about: "Token for the page in token mode, 16 characters or more" },
   { name: MASTER_KEY_VARIABLE, about: "32 random bytes as base64; seals saved keys and tokens" },
   { name: "BOTT_ORIGIN", about: "Public origin of the page, such as https://bott.example.com" },
