@@ -126,7 +126,10 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const done = await store.task(1);
     expect(done).toMatchObject({ status: "completed", answer: "found it", policy: "deny" });
     const helper = await store.bot(done?.bot as string);
-    expect(helper).toMatchObject({ temporary: true, role: "A short-lived agent with a single goal." });
+    expect(helper).toMatchObject({
+      temporary: true,
+      role: "A short-lived agent with a single goal.",
+    });
     expect(helper?.name).toMatch(/^Agent-[0-9a-f]{8}$/);
     expect(sink.texts()).toEqual([`Task #1 (${helper?.name}), completed:\nfound it`]);
     const reports = await db.query("SELECT status,text FROM inbox");

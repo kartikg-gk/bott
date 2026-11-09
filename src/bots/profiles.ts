@@ -20,7 +20,8 @@ export interface Profile {
 export type ProfileValues = Partial<Omit<Profile, "greeting">>;
 
 export function validateProfile(p: Omit<Profile, "greeting">): void {
-  if (!Object.hasOwn(STYLES, p.style)) throw new Error("Pick a supported speaking style from the list");
+  if (!Object.hasOwn(STYLES, p.style))
+    throw new Error("Pick a supported speaking style from the list");
   if (typeof p.voice !== "string" || p.voice.length > 2000) {
     throw new Error("Voice notes are limited to at most 2000 characters");
   }

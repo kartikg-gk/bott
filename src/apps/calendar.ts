@@ -132,7 +132,8 @@ function eventPayload(a: Item): Item {
       throw new AppError("Give start and end the same way: both whole days or both times");
     }
     if ("date" in payload.start) {
-      if (payload.start.date >= payload.end.date) throw new AppError("The end has to come after the start");
+      if (payload.start.date >= payload.end.date)
+        throw new AppError("The end has to come after the start");
     } else window(a);
   }
   if ("attendees" in a) payload.attendees = a.attendees.map((email: string) => ({ email }));

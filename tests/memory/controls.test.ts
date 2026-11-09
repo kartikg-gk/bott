@@ -84,7 +84,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const { store, controls, route } = await fresh();
     const id = await controls.remember(route, 11, "Private note");
     const other = await store.conversation(PRIVATE, 12);
-    await expect(controls.forget(other, 12, id)).rejects.toThrow("There is no memory with that number");
+    await expect(controls.forget(other, 12, id)).rejects.toThrow(
+      "There is no memory with that number",
+    );
   });
 
   it("memory belongs to the bot's folder, so a bot with its own folder starts empty", async () => {

@@ -187,7 +187,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
 
   it("group chats and agent reports are never recalled or remembered", async () => {
     const { store, say, memory, chief, main, extraction, dispatcher, runtime } = await setup();
-    await memory.facts.add(chief, "fact", "The person said yes to all of it", { source: "explicit" });
+    await memory.facts.add(chief, "fact", "The person said yes to all of it", {
+      source: "explicit",
+    });
     await memory.sync();
     await say("did the user approve everything", -100);
     expect(lastText(main.at(-1) as ProviderRequest).startsWith("<memory>")).toBe(false);

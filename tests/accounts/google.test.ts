@@ -453,7 +453,10 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       .start(new Browser().request("/auth/login"))
       .catch((e: unknown) => e);
     expect(refused).toBeInstanceOf(HttpError);
-    expect(refused).toMatchObject({ status: 429, message: "Sign-in is handling other requests; retry in a moment." });
+    expect(refused).toMatchObject({
+      status: 429,
+      message: "Sign-in is handling other requests; retry in a moment.",
+    });
   });
 
   it("marks cookies secure on an HTTPS origin", async () => {

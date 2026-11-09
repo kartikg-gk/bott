@@ -40,7 +40,9 @@ export class D1Database implements Database {
     } catch (error) {
       const name = (error as Error).name;
       if (name === "TimeoutError" || name === "AbortError") {
-        throw new Error(`D1 query failed after the request timed out after ${D1_TIMEOUT_MS / 1000} s`);
+        throw new Error(
+          `D1 query failed after the request timed out after ${D1_TIMEOUT_MS / 1000} s`,
+        );
       }
       throw new Error(`D1 query failed: ${name}`);
     }

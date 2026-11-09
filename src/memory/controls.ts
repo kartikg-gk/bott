@@ -114,7 +114,8 @@ export class MemoryControls {
   ): Promise<{ memory: Memory; scope: Scope; bot: Bot }> {
     if (!this.memory) throw new MemoryError("Memory is not enabled on this server.");
     const owner = ownerFor(route.chat, actor);
-    if (owner === null) throw new MemoryError("Memory stays off in group chats, since it is personal.");
+    if (owner === null)
+      throw new MemoryError("Memory stays off in group chats, since it is personal.");
     const current = (await this.store.getRoute(route.id)) ?? route;
     const bot = await this.store.bot(current.bot ?? (await this.store.chief()).id);
     if (!bot) throw new MemoryError("The bot was deleted");

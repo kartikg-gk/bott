@@ -188,6 +188,8 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect((await call("cancel_task", { task_id: id })).text).toBe("Cancelling.");
     expect((await store.task(id))?.status).toBe("cancelled");
     expect((await call("cancel_task", { task_id: id })).isError).toBe(true);
-    expect((await call("check_task", { task_id: 999 })).text).toBe("There is no task with that number");
+    expect((await call("check_task", { task_id: 999 })).text).toBe(
+      "There is no task with that number",
+    );
   });
 });
