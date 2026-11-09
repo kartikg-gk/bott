@@ -1,4 +1,5 @@
 import type { App, AppContext, AppServices, Env } from "./app.ts";
+import { bland } from "./bland.ts";
 import { calendar } from "./calendar.ts";
 import { contacts } from "./contacts.ts";
 import { docs } from "./docs.ts";
@@ -35,6 +36,7 @@ const ORDER: App[] = [
   wispr,
   granola,
   tinyfish,
+  bland,
   webSearch,
   webScrape,
   telegram,

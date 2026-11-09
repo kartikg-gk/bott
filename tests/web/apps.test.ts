@@ -206,5 +206,9 @@ describe.each(backends)("%s backend", (kind) => {
 
     const listed = (await (await send("/api/apps")).json()) as { id: string; connected: boolean }[];
     expect(listed.find((app) => app.id === "github")?.connected).toBe(true);
+
+    const call = await send("/api/apps/bland/calls/c_1?offset=0");
+    expect(call.status).toBe(409);
+    expect(await call.json()).toEqual({ error: "Connect Bland AI under Apps first" });
   });
 });

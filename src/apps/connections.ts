@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import type { Store } from "../store/store.ts";
 import type { Env } from "./app.ts";
+import { blandCall, checkBlandKey } from "./bland.ts";
 import type { AttemptLimit, CredentialStore, FlowStore } from "./credentials.ts";
 import { MemoryAttempts } from "./credentials.ts";
 import { checkGranolaKey, granolaKeyValid } from "./granola.ts";
-import { AppError, type Fetch, HttpError } from "./http.ts";
+import { AppError, type Fetch, HttpError, NetworkError } from "./http.ts";
 import {
   type Client,
   OAUTH_APPS,
@@ -55,6 +56,7 @@ export const KEY_APPS: Record<
 > = {
   granola: { label: "Granola", valid: granolaKeyValid, check: checkGranolaKey },
   tinyfish: { label: "TinyFish", valid: providerKeyValid, check: checkTinyfishKey },
+  bland: { label: "Bland AI", valid: providerKeyValid, check: checkBlandKey },
 };
 
 /** Who is asking: the signed-in account, its browser session, and a fresh check it still is. */
@@ -417,6 +419,31 @@ export class AppConnections {
       available: (name) => this.connected(account, name),
       services: { telegramSend: (text) => this.sendToLinkedChat(account, text) },
     });
+  }
+
+  /** A Bland AI call's outcome for the page, its transcript read from `offset` (digits). */
+  async blandCall(caller: Caller, call: string, offset: string | null): Promise<unknown> {
+    if (!(await this.connected(caller.account, "bland"))) {
+      throw new ConnectionError(409, "Connect Bland AI under Apps first");
+    }
+    const raw = offset ?? "0";
+    if (!/^[0-9]{1,8}$/.test(raw))
+      throw new ConnectionError(400, "That transcript offset is not valid");
+    try {
+      const key = await this.token(caller.account, "bland");
+      return await blandCall(this.fetch, key, call, Number(raw));
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        throw new ConnectionError(404, "Bland AI has no call with that ID");
+      }
+      if (error instanceof HttpError || error instanceof NetworkError) {
+        throw new ConnectionError(502, "Bland AI could not be asked about that call");
+      }
+      if (error instanceof AppError) {
+        throw new ConnectionError(400, "That call ID or the Bland AI connection is not usable");
+      }
+      throw error;
+    }
   }
 
   /** The account's current access token for the app; `rejected` forces a renewal. */

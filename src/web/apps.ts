@@ -110,6 +110,15 @@ export function connectedApps(connections: AppConnections): AppsSeam {
         answer(async () => fresh(await work(caller(ctx))));
       router
         .add("GET", "/api/apps", (ctx) => call(ctx, (who) => connections.list(who)))
+        .add("GET", "/api/apps/bland/calls/:call", (ctx, request, params) =>
+          call(ctx, (who) =>
+            connections.blandCall(
+              who,
+              params.call as string,
+              new URL(request.url).searchParams.get("offset"),
+            ),
+          ),
+        )
         .add("POST", "/api/apps/telegram/confirm", (ctx) =>
           call(ctx, (who) => connections.confirmTelegram(who)),
         )
