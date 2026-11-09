@@ -9,9 +9,21 @@ import { AppError, type Fetch, HttpError } from "./http.ts";
 import { linear } from "./linear.ts";
 import { notion } from "./notion.ts";
 import { todoist } from "./todoist.ts";
+import { wispr } from "./wispr.ts";
 
 /** Every app the server can run, in the order people see them. */
-const ORDER: App[] = [github, gmail, calendar, drive, contacts, notion, linear, todoist, granola];
+const ORDER: App[] = [
+  github,
+  gmail,
+  calendar,
+  drive,
+  contacts,
+  notion,
+  linear,
+  todoist,
+  wispr,
+  granola,
+];
 
 /** Every app the server can run, by name. */
 export const APPS: Record<string, App> = Object.fromEntries(ORDER.map((app) => [app.name, app]));

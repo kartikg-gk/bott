@@ -9,6 +9,13 @@ import { AppError, basic, type Fetch, HttpError } from "./http.ts";
 import { NOTION_VERSION } from "./notion.ts";
 import { AppRunner } from "./registry.ts";
 import { TODOIST_MCP_URL, TODOIST_SCOPE } from "./todoist.ts";
+import {
+  registerWisprClient,
+  WISPR_AUTH_URL,
+  WISPR_MCP_URL,
+  WISPR_SCOPES,
+  WISPR_TOKEN_URL,
+} from "./wispr.ts";
 
 /** A refusal the web layer turns into an HTTP status with this message. */
 export class ConnectionError extends Error {
@@ -93,6 +100,14 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
     secret: "BOTT_TODOIST_CLIENT_SECRET",
     scopes: [TODOIST_SCOPE],
   },
+  // Wispr Flow registers a public client per account, so the server holds no client settings.
+  wispr: {
+    authUrl: WISPR_AUTH_URL,
+    tokenUrl: WISPR_TOKEN_URL,
+    clientId: "",
+    secret: "",
+    scopes: WISPR_SCOPES,
+  },
 };
 
 /** Apps an account connects with its own API key, checked with the service before saving. */
@@ -165,7 +180,7 @@ export class AppConnections {
   }
 
   configured(name: string): boolean {
-    if (name in KEY_APPS) return true;
+    if (name in KEY_APPS || name === "wispr") return true;
     const app = OAUTH_APPS[name];
     return !!app && !!this.env[app.clientId] && !!this.env[app.secret];
   }
@@ -223,6 +238,32 @@ export class AppConnections {
     };
   }
 
+  wisprFields(clientId: string): Record<string, string> {
+    return { client_id: clientId, resource: WISPR_MCP_URL };
+  }
+
+  /** The account's registered Wispr Flow client for this callback, registering one if needed. */
+  async wisprClient(account: string, callback: string): Promise<string> {
+    let saved: { callback?: unknown; client_id?: unknown } | null = null;
+    try {
+      const raw = await this.opts.credentials.get(account, "app-client", "wispr");
+      saved = raw ? JSON.parse(raw) : null;
+    } catch {
+      saved = null;
+    }
+    if (saved?.callback === callback && typeof saved.client_id === "string" && saved.client_id) {
+      return saved.client_id;
+    }
+    const id = await registerWisprClient(this.fetch, callback);
+    await this.opts.credentials.put(
+      account,
+      "app-client",
+      "wispr",
+      JSON.stringify({ callback, client_id: id }),
+    );
+    return id;
+  }
+
   /** Calls the app's token endpoint and reads its reply, recognising an expired grant. */
   async exchange(
     name: string,
@@ -267,6 +308,9 @@ export class AppConnections {
     const code =
       body && typeof body === "object" ? (body as Record<string, unknown>).error : undefined;
     if ([200, 400, 401].includes(reply.status)) {
+      if (name === "wispr" && code === "invalid_client") {
+        throw new ClientExpired("Connect Wispr Flow again so it registers a fresh OAuth client");
+      }
       if (
         data.grant_type === "refresh_token" &&
         (code === "invalid_grant" || code === "bad_refresh_token")
@@ -299,6 +343,7 @@ export class AppConnections {
       if (name === "linear" && Array.isArray(result.scope)) {
         for (const scope of result.scope) if (typeof scope === "string") granted.add(scope);
       }
+      if (name === "wispr" && refresh) granted.add("offline_access");
       const older =
         name === "gmail" &&
         previous !== undefined &&
@@ -335,11 +380,14 @@ export class AppConnections {
   async refresh(account: string, name: string, token: SavedToken, force = false) {
     if (!force && (token.expires === null || token.expires > this.clock() + 30)) return token;
     if (!token.refresh) throw new AuthorizationExpired(`Reconnect ${name} to renew access`);
-    const reply = await this.exchange(name, {
-      grant_type: "refresh_token",
-      refresh_token: token.refresh,
-    });
-    const updated = this.normalize(name, reply, token);
+    const client = name === "wispr" ? this.wisprFields(String(token.client_id)) : undefined;
+    const reply = await this.exchange(
+      name,
+      { grant_type: "refresh_token", refresh_token: token.refresh },
+      client,
+    );
+    const updated: SavedToken = this.normalize(name, reply, token);
+    if (name === "wispr") updated.client_id = token.client_id as string;
     await this.save(account, name, updated);
     return updated;
   }
@@ -435,12 +483,24 @@ export class AppConnections {
     const state = randomToken();
     const verifier = randomToken();
     const callback = this.callbackUrl(name);
+    let clientId = String(this.env[app.clientId]);
     await this.locked(caller.account, name, async () => {
-      await this.stillSignedIn(caller, "Your session ended; sign in before connecting an app");
-      await this.opts.flows.start(caller.account, name, caller.session, state, verifier);
+      const again = "Your session ended; sign in before connecting an app";
+      await this.stillSignedIn(caller, again);
+      let flow = verifier;
+      if (name === "wispr") {
+        try {
+          clientId = await this.wisprClient(caller.account, callback);
+        } catch {
+          throw new ConnectionError(502, "Wispr Flow did not accept the OAuth client registration");
+        }
+        await this.stillSignedIn(caller, again);
+        flow = JSON.stringify({ verifier, client_id: clientId, callback });
+      }
+      await this.opts.flows.start(caller.account, name, caller.session, state, flow);
     });
     const query: Record<string, string> = {
-      client_id: String(this.env[app.clientId]),
+      client_id: clientId,
       redirect_uri: callback,
       response_type: "code",
       state,
@@ -458,6 +518,12 @@ export class AppConnections {
       Object.assign(query, { scope: [...app.scopes].sort().join(","), actor: "user" });
     } else if (name === "todoist") {
       Object.assign(query, { scope: TODOIST_SCOPE, resource: TODOIST_MCP_URL });
+    } else if (name === "wispr") {
+      Object.assign(query, {
+        scope: [...app.scopes].sort().join(" "),
+        resource: WISPR_MCP_URL,
+        prompt: "consent",
+      });
     }
     return { url: `${app.authUrl}?${new URLSearchParams(query)}` };
   }
@@ -475,20 +541,41 @@ export class AppConnections {
       throw new ConnectionError(400, "Begin connecting the app again");
     }
     await this.locked(caller.account, name, async () => {
-      const verifier = await this.opts.flows.consume(caller.account, name, caller.session, state);
-      if (verifier === null || code.length < 1 || code.length > 4096) {
+      const flow = await this.opts.flows.consume(caller.account, name, caller.session, state);
+      if (flow === null || code.length < 1 || code.length > 4096) {
         throw new ConnectionError(400, "The app sign-in timed out or was turned down");
       }
       let token: SavedToken;
       try {
-        const reply = await this.exchange(name, {
-          grant_type: "authorization_code",
-          code,
-          code_verifier: verifier,
-          redirect_uri: this.callbackUrl(name),
-        });
+        const redirect = this.callbackUrl(name);
+        let verifier = flow;
+        let client: Record<string, string> | undefined;
+        if (name === "wispr") {
+          const bound = JSON.parse(flow) as {
+            verifier: string;
+            client_id: string;
+            callback: string;
+          };
+          if (bound.callback !== redirect) throw new AppError("The Wispr Flow return address has changed");
+          verifier = bound.verifier;
+          client = this.wisprFields(bound.client_id);
+        }
+        const reply = await this.exchange(
+          name,
+          {
+            grant_type: "authorization_code",
+            code,
+            code_verifier: verifier,
+            redirect_uri: redirect,
+          },
+          client,
+        );
         token = this.normalize(name, reply);
-      } catch {
+        if (client) token.client_id = client.client_id;
+      } catch (error) {
+        if (error instanceof ClientExpired) {
+          await this.opts.credentials.delete(caller.account, "app-client", name);
+        }
         throw new ConnectionError(502, `Could not connect ${name}. Start a new connection.`);
       }
       await this.stillSignedIn(caller, "Your session ended; sign in before connecting an app");
@@ -528,7 +615,7 @@ export class AppConnections {
 
   /** Asks the provider to drop the grant; true when it confirmed. */
   async revoke(account: string, name: string, token: SavedToken): Promise<boolean> {
-    if (name in KEY_APPS || !this.configured(name)) return false;
+    if (name in KEY_APPS || name === "wispr" || !this.configured(name)) return false;
     const app = OAUTH_APPS[name] as OAuthApp;
     let reply: Response;
     const form = (fields: Record<string, string>) => ({
