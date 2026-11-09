@@ -98,6 +98,7 @@ export class RemoteSession {
       const reply = await this.fetcher(this.url, {
         method: "DELETE",
         headers: { ...this.headers, "mcp-session-id": this.session },
+        redirect: "manual",
         signal: AbortSignal.timeout(5000),
       });
       await reply.body?.cancel().catch(() => {});

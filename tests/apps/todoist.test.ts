@@ -37,6 +37,28 @@ function server(answer?: (name: string, args: unknown) => unknown) {
 }
 
 describe("todoist", () => {
+  it("follows no redirect from the tool server, ending the session included", async () => {
+    const mcp = fakeMcp(TOOLS);
+    const fake = fakeFetch({ [`POST ${MCP}`]: mcp.post, [`DELETE ${MCP}`]: mcp.remove });
+    const modes: string[] = [];
+    const fetcher = Object.assign(
+      (url: string | URL | Request, init?: RequestInit) => {
+        modes.push(`${init?.method ?? "GET"} ${init?.redirect ?? "follow"}`);
+        return fake(url, init);
+      },
+      { seen: fake.seen },
+    );
+    const apps = new AppRunner({
+      fetch: fetcher,
+      env: {},
+      accessToken: async () => "todo-token",
+      available: async () => true,
+    });
+    await apps.run("todoist_list_tools", {});
+    expect(modes).toContain("DELETE manual");
+    expect(modes.every((mode) => mode.endsWith(" manual"))).toBe(true);
+  });
+
   it("lists tools with a mode that counts as read only when both sides agree", async () => {
     expect(APPS.todoist).toBe(todoist);
     expect(OAUTH_APPS.todoist?.scopes).toEqual(["data:read_write"]);
