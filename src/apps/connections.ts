@@ -4,6 +4,7 @@ import type { Env } from "./app.ts";
 import type { AttemptLimit, CredentialStore, FlowStore } from "./credentials.ts";
 import { MemoryAttempts } from "./credentials.ts";
 import { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GOOGLE_TOKEN_URL } from "./gmail.ts";
+import { checkGranolaKey, granolaKeyValid } from "./granola.ts";
 import { AppError, basic, type Fetch, HttpError } from "./http.ts";
 import { NOTION_VERSION } from "./notion.ts";
 import { AppRunner } from "./registry.ts";
@@ -94,6 +95,18 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
   },
 };
 
+/** Apps an account connects with its own API key, checked with the service before saving. */
+export const KEY_APPS: Record<
+  string,
+  {
+    label: string;
+    valid: (key: unknown) => key is string;
+    check: (f: Fetch, key: string) => Promise<void>;
+  }
+> = {
+  granola: { label: "Granola", valid: granolaKeyValid, check: checkGranolaKey },
+};
+
 /** Fields some token endpoints need on every exchange. */
 const EXTRA_TOKEN_FIELDS: Record<string, Record<string, string>> = {
   todoist: { resource: TODOIST_MCP_URL },
@@ -148,10 +161,11 @@ export class AppConnections {
 
   /** The apps an account can connect, in the order people see them. */
   get names(): string[] {
-    return Object.keys(OAUTH_APPS);
+    return [...Object.keys(OAUTH_APPS), ...Object.keys(KEY_APPS)];
   }
 
   configured(name: string): boolean {
+    if (name in KEY_APPS) return true;
     const app = OAUTH_APPS[name];
     return !!app && !!this.env[app.clientId] && !!this.env[app.secret];
   }
@@ -402,7 +416,7 @@ export class AppConnections {
         configured: this.configured(name),
         connected: await this.connected(caller.account, name),
         saved,
-        keyAuth: false,
+        keyAuth: name in KEY_APPS,
         bots: enabled,
       });
     }
@@ -412,6 +426,8 @@ export class AppConnections {
   /** Starts an OAuth connection and returns where to send the browser. */
   async connect(caller: Caller, name: string): Promise<{ url: string }> {
     this.known(name);
+    const keyed = KEY_APPS[name];
+    if (keyed) throw new ConnectionError(409, `Connect ${keyed.label} with an API key in Apps`);
     if (!this.configured(name)) {
       throw new ConnectionError(409, `Configure the ${name} OAuth client on the server`);
     }
@@ -455,7 +471,7 @@ export class AppConnections {
     this.known(name);
     const state = query.state ?? "";
     const code = query.code ?? "";
-    if (state.length !== 43 || !this.configured(name)) {
+    if (name in KEY_APPS || state.length !== 43 || !this.configured(name)) {
       throw new ConnectionError(400, "Begin connecting the app again");
     }
     await this.locked(caller.account, name, async () => {
@@ -482,9 +498,37 @@ export class AppConnections {
     return "/?apps=1";
   }
 
+  /** Saves an app's API key once the service has accepted it. */
+  async saveKey(caller: Caller, name: string, body: unknown): Promise<{ connected: true }> {
+    this.known(name);
+    const keyed = KEY_APPS[name];
+    if (!keyed) throw new ConnectionError(404, "No app connects with that API key");
+    const key = body && typeof body === "object" ? (body as { key?: unknown }).key : undefined;
+    if (!keyed.valid(key)) throw new ConnectionError(400, `Enter a ${keyed.label} API key`);
+    const again = `Sign in again before connecting ${keyed.label}`;
+    await this.locked(caller.account, name, async () => {
+      await this.stillSignedIn(caller, again);
+      if (!(await this.attempts.attempt(caller.account))) {
+        throw new ConnectionError(429, "Retry the key check in a few minutes");
+      }
+      try {
+        await keyed.check(this.fetch, key);
+      } catch (error) {
+        if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+          throw new ConnectionError(422, `${keyed.label} rejected that key`);
+        }
+        throw new ConnectionError(502, `Could not validate the ${keyed.label} key`);
+      }
+      await this.stillSignedIn(caller, again);
+      await this.clearGrants(caller.account, name);
+      await this.save(caller.account, name, { access: key, refresh: null, expires: null });
+    });
+    return { connected: true };
+  }
+
   /** Asks the provider to drop the grant; true when it confirmed. */
   async revoke(account: string, name: string, token: SavedToken): Promise<boolean> {
-    if (!this.configured(name)) return false;
+    if (name in KEY_APPS || !this.configured(name)) return false;
     const app = OAUTH_APPS[name] as OAuthApp;
     let reply: Response;
     const form = (fields: Record<string, string>) => ({
