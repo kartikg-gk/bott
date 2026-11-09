@@ -263,7 +263,7 @@ async function outputOf(
   }
   if (signal.aborted) return errorOutput(ABORTED_TEXT);
   try {
-    const output = await tool.run(parsed.data, { signal, onUpdate });
+    const output = await tool.run(parsed.data, { signal, onUpdate, callId: call.id });
     return signal.aborted ? errorOutput(ABORTED_TEXT) : output;
   } catch (err) {
     if (signal.aborted) return errorOutput(ABORTED_TEXT);

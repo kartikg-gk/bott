@@ -13,7 +13,7 @@ export interface ToolSpec {
   readOnly: boolean;
   run(
     input: unknown,
-    ctx: { signal: AbortSignal; onUpdate?: (partial: ToolOutput) => void },
+    ctx: { signal: AbortSignal; onUpdate?: (partial: ToolOutput) => void; callId?: string },
   ): Promise<ToolOutput>;
 }
 
