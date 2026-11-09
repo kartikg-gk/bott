@@ -119,7 +119,7 @@ describe("drive", () => {
       shortcut: "t",
     });
     await expect(apps.run("drive_read_file", { file_id: ".." })).rejects.toThrow(
-      "That Google resource ID is not valid",
+      "That is not a Google ID this app accepts",
     );
   });
 

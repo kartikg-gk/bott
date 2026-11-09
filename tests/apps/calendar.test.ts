@@ -57,7 +57,7 @@ describe("calendar", () => {
     expect(fetcher.seen[0]?.headers.get("authorization")).toBe("Bearer cal-token");
     await expect(
       apps.run("calendar_list_events", { start: "2026-11-02", end: "2026-11-03T00:00:00Z" }),
-    ).rejects.toThrow("Give an RFC 3339 time that includes its offset");
+    ).rejects.toThrow("Times need RFC 3339 form with an offset, such as 2026-01-05T09:00:00+01:00");
     await expect(
       apps.run("calendar_list_events", {
         start: "2026-11-02T10:00:00Z",
@@ -93,7 +93,7 @@ describe("calendar", () => {
         start: "2026-11-01T00:00:00Z",
         end: "2026-12-05T00:00:00Z",
       }),
-    ).rejects.toThrow("Ask about 1 to 50 calendars over at most 31 days");
+    ).rejects.toThrow("Ask about 1 to 50 calendars over no more than 31 days");
   });
 
   it("refuses free time it could not verify for every calendar", async () => {
@@ -107,7 +107,7 @@ describe("calendar", () => {
         start: "2026-11-02T09:00:00Z",
         end: "2026-11-02T10:00:00Z",
       }),
-    ).rejects.toThrow("Free time could not be confirmed for each calendar asked about");
+    ).rejects.toThrow("Free times could not be checked on all of those calendars");
   });
 
   it("creates, updates, answers and deletes events with a guest notice", async () => {
@@ -140,10 +140,10 @@ describe("calendar", () => {
         end: "2026-11-02T10:00:00Z",
         notify: "all",
       }),
-    ).rejects.toThrow("Start and end must both be whole days or both be times");
+    ).rejects.toThrow("Give start and end the same way: both whole days or both times");
     await expect(
       apps.run("calendar_update_event", { event_id: "e1", notify: "all" }),
-    ).rejects.toThrow("Give at least one event field to change");
+    ).rejects.toThrow("Name at least one event field to change");
 
     await apps.run("calendar_respond_to_event", {
       event_id: "e1",

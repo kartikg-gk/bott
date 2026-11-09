@@ -20,19 +20,19 @@ const optionalEvent = ["calendar_id", "description", "location", "attendees"];
 const tools = [
   tool(
     "calendar_list_calendars",
-    "Show the calendars and the ID of each.",
+    "Every calendar the person can see, with its ID.",
     { page_token: text },
     { optional: "all" },
   ),
   tool(
     "calendar_list_events",
-    "Show events overlapping a time range given as RFC 3339 times with offsets.",
+    "Events that fall at least partly inside a time window. Give start and end as RFC 3339 times that include an offset.",
     { calendar_id: text, start: text, end: text, page_token: text },
     { optional: ["calendar_id", "page_token"] },
   ),
   tool(
     "calendar_find_free_time",
-    "Find times when everyone listed is free, within 31 days; 30 minutes by default.",
+    "Times when all the given calendars are free, over at most 31 days. Gaps under 30 minutes are skipped unless a minimum is given.",
     {
       calendar_ids: z.array(text).min(1).max(50),
       start: text,
@@ -43,21 +43,21 @@ const tools = [
   ),
   tool(
     "calendar_create_event",
-    "Make an event from times with offsets or whole-day dates; the end is exclusive. " +
-      "Pick who gets notified.",
+    "Adds an event. Use times with an offset, or whole-day dates where the end day is not included. " +
+      "Say who gets an invitation.",
     { calendar_id: text, ...eventFields },
     { optional: optionalEvent, write: true, review: true },
   ),
   tool(
     "calendar_update_event",
-    "Change chosen fields of an event; attendees, when given, become the full guest list. " +
-      "Pick who gets notified.",
+    "Changes only the event fields given. A guest list, when given, takes the place of the old one. " +
+      "Say who hears about the change.",
     { calendar_id: text, event_id: text, ...eventFields },
     { optional: [...optionalEvent, "title", "start", "end"], write: true, review: true },
   ),
   tool(
     "calendar_respond_to_event",
-    "Set your own reply to the invite and pick who gets notified.",
+    "Sets the person's own answer to an invitation and says who hears about it.",
     {
       calendar_id: text,
       event_id: text,
@@ -68,7 +68,7 @@ const tools = [
   ),
   tool(
     "calendar_delete_event",
-    "Remove an event and pick who gets notified.",
+    "Removes an event and says who hears about it.",
     { calendar_id: text, event_id: text, notify },
     { optional: ["calendar_id"], write: true, review: true },
   ),
@@ -83,7 +83,10 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** Seconds since the epoch of an RFC 3339 timestamp that names its offset. */
 export function timestamp(value: unknown): number {
   const parsed = typeof value === "string" && TIMESTAMP.test(value) ? Date.parse(value) : NaN;
-  if (Number.isNaN(parsed)) throw new AppError("Give an RFC 3339 time that includes its offset");
+  if (Number.isNaN(parsed))
+    throw new AppError(
+      "Times need RFC 3339 form with an offset, such as 2026-01-05T09:00:00+01:00",
+    );
   return parsed / 1000;
 }
 
@@ -126,7 +129,7 @@ function eventPayload(a: Item): Item {
   for (const key of ["start", "end"]) if (key in a) payload[key] = eventTime(a[key]);
   if (payload.start && payload.end) {
     if ("date" in payload.start !== "date" in payload.end) {
-      throw new AppError("Start and end must both be whole days or both be times");
+      throw new AppError("Give start and end the same way: both whole days or both times");
     }
     if ("date" in payload.start) {
       if (payload.start.date >= payload.end.date) throw new AppError("The end has to come after the start");
@@ -134,7 +137,7 @@ function eventPayload(a: Item): Item {
   }
   if ("attendees" in a) payload.attendees = a.attendees.map((email: string) => ({ email }));
   if (Object.keys(payload).length === 0) {
-    throw new AppError("Give at least one event field to change");
+    throw new AppError("Name at least one event field to change");
   }
   return payload;
 }
@@ -143,7 +146,7 @@ async function freeTime(api: GoogleApi, a: Item): Promise<Item> {
   const [start, end] = window(a);
   const calendars = [...new Set<string>(a.calendar_ids)];
   if (calendars.length < 1 || calendars.length > 50 || end - start > 31 * 86400) {
-    throw new AppError("Ask about 1 to 50 calendars over at most 31 days");
+    throw new AppError("Ask about 1 to 50 calendars over no more than 31 days");
   }
   const data = await api.call("POST", `${API}/freeBusy`, {
     json: { timeMin: a.start, timeMax: a.end, items: calendars.map((id) => ({ id })) },
@@ -152,7 +155,7 @@ async function freeTime(api: GoogleApi, a: Item): Promise<Item> {
   for (const id of calendars) {
     const entry = data?.calendars?.[id];
     if (!entry || typeof entry !== "object" || entry.errors || !Array.isArray(entry.busy)) {
-      throw new AppError("Free time could not be confirmed for each calendar asked about");
+      throw new AppError("Free times could not be checked on all of those calendars");
     }
     for (const item of entry.busy) {
       const lower = Math.max(start, timestamp(item.start));
@@ -190,13 +193,13 @@ async function page(
 
 async function run(api: GoogleApi, name: string, a: Item): Promise<Item> {
   if (name === "calendar_list_calendars") {
-    return page(api, `${API}/users/me/calendarList`, a, "id,summary,primary,timeZone,accessRole");
+    return page(api, `${API}/users/me/calendarList`, a, "id,primary,summary,accessRole,timeZone");
   }
   if (name === "calendar_find_free_time") return freeTime(api, a);
   const base = `${API}/calendars/${segment(a.calendar_id ?? "primary")}/events`;
   if (name === "calendar_list_events") {
     window(a);
-    const fields = "id,summary,description,start,end,status,location,htmlLink,organizer";
+    const fields = "id,status,summary,start,end,location,description,organizer,htmlLink";
     return page(api, base, a, fields, {
       timeMin: a.start,
       timeMax: a.end,
@@ -205,7 +208,7 @@ async function run(api: GoogleApi, name: string, a: Item): Promise<Item> {
     });
   }
   if (!notify.safeParse(a.notify).success) {
-    throw new AppError("Pick who gets notified: all, externalOnly, or none");
+    throw new AppError("Set notify to all, externalOnly or none");
   }
   const params = { sendUpdates: a.notify };
   if (name === "calendar_create_event") {
@@ -216,12 +219,12 @@ async function run(api: GoogleApi, name: string, a: Item): Promise<Item> {
     return api.call("PATCH", url, { params, json: eventPayload(a) });
   }
   if (name === "calendar_respond_to_event") {
-    const event = await api.get<Item>(url, { fields: "etag,attendees(email,self)" });
+    const event = await api.get<Item>(url, { fields: "attendees(self,email),etag" });
     const me = (event?.attendees ?? [])
       .filter((guest: Item) => guest.self && guest.email)
       .map((guest: Item) => guest.email);
     if (me.length !== 1 || !event?.etag) {
-      throw new AppError("This account could not be found among the attendees of the event");
+      throw new AppError("The connected account is not on this event's guest list");
     }
     return api.call("PATCH", url, {
       params,

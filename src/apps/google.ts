@@ -3,7 +3,7 @@ import { AppError, bearer, type Fetch, type Params, type RequestOptions, request
 /** One path segment of a Google resource ID, escaped so it cannot climb out of its path. */
 export function segment(value: unknown): string {
   if (typeof value !== "string" || !value || value === "." || value === "..") {
-    throw new AppError("That Google resource ID is not valid");
+    throw new AppError("That is not a Google ID this app accepts");
   }
   return encodeURIComponent(value);
 }
