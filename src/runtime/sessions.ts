@@ -35,6 +35,7 @@ import { type ComputerSettings, computerSettings } from "../computers/settings.t
 import { Lease } from "../db/leases.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
+import { answerOwnCall, OWN_TOOL_NAMES, ownTools } from "./ownTools.ts";
 import { type Agents, answerTeamCall, jobTools, teamTools } from "./team.ts";
 
 export interface RuntimeConfig {
@@ -225,6 +226,13 @@ export class SessionManager {
 
   private get settings(): ComputerSettings {
     return this.config.computer ?? computerSettings({});
+  }
+
+  /** Copies a saved note into a sandbox, which keeps its own copy of the notes. */
+  private async mirrorNote(bot: Pick<Bot, "id">, file: string, text: string): Promise<void> {
+    if (this.settings.executor !== "daytona") return;
+    const ws = this.workspaces.get(bot.id);
+    if (ws?.memoryPath) await ws.writeFile(`${ws.memoryPath}/${file}`, text);
   }
 
   /** Deletes the bot's computer, once nothing is running on the bot. */
@@ -715,6 +723,7 @@ export class SessionManager {
     const team = {
       hostTools: [
         ...(bot.chief ? [...teamTools(), ...jobTools()] : jobTools()),
+        ...ownTools(),
         ...(apps ? [apps.loader(built.apps)] : []),
       ],
       answerHostTool: async (call: HostToolCall, signal: AbortSignal) => {
@@ -724,6 +733,18 @@ export class SessionManager {
           return loaded.output;
         }
         if (apps?.owns(call.name)) return apps.call(bot, call.name, call.input, signal);
+        if (OWN_TOOL_NAMES.has(call.name)) {
+          return answerOwnCall(
+            {
+              store: this.store,
+              bot,
+              stateDir: this.config.stateDir,
+              folders: this.folders,
+              mirror: (file, text) => this.mirrorNote(bot, file, text),
+            },
+            call,
+          );
+        }
         return answerTeamCall(
           {
             store: this.store,
