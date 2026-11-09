@@ -112,6 +112,9 @@ function accountRoutes(router: ApiRouter, models: AccountModels): void {
     );
 }
 
+/** Where a provider sends the browser back after someone connects an app. */
+const APP_CALLBACK = /^\/auth\/apps\/([a-z0-9_-]+)\/callback$/;
+
 /** The request handler for the page and the API, in either sign-in mode. */
 export function createApp(opts: AppOptions): (request: Request) => Promise<Response> {
   const { auth } = opts;
@@ -151,15 +154,22 @@ export function createApp(opts: AppOptions): (request: Request) => Promise<Respo
       return fresh({ mode: "google", email: account?.email ?? null });
     }
     if (path === "/" && get) return page();
-    if (!path.startsWith("/api/")) return fresh({ error: "Not found" }, 404);
+    const returning = get ? APP_CALLBACK.exec(path) : null;
+    if (!returning && !path.startsWith("/api/")) return fresh({ error: "Not found" }, 404);
     if (!account) return fresh({ error: "Sign in with Google first" }, 401);
     const gateway = await setup.gateway(account);
-    return api(request, path, {
+    const ctx: Ctx = {
       gateway,
       actor: gateway.actor,
       account,
+      session: token ?? "",
       alive: async () => (await login.identity(token)) !== null,
-    });
+    };
+    if (returning) {
+      if (!opts.apps?.callback) return fresh({ error: "Not found" }, 404);
+      return opts.apps.callback(ctx, returning[1] as string, new URL(request.url));
+    }
+    return api(request, path, ctx);
   }
 
   async function local(request: Request, path: string, setup: TokenAuth): Promise<Response> {

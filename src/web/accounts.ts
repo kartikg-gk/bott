@@ -30,7 +30,7 @@ export interface AccountGatewaysOptions {
   workers?: number;
   /** One provider for every account instead of each account's own model, as in tests. */
   fixed?: ProviderFactory;
-  /** Connected apps for each account's bots; none until the apps layer is part of the build. */
+  /** Connected apps for each account's bots; none when left out. */
   apps?: AppsSeam;
 }
 
@@ -42,7 +42,7 @@ export class AccountGateways {
   readonly runtimes: AccountRuntimes<Gateway>;
   private readonly files: Database[] = [];
 
-  constructor(private readonly opts: AccountGatewaysOptions) {
+  constructor(opts: AccountGatewaysOptions) {
     this.runtimes = new AccountRuntimes<Gateway>({
       stateDir: opts.stateDir,
       hosted: opts.hosted,

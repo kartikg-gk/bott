@@ -9,6 +9,8 @@ export interface Ctx {
   actor: number;
   /** The signed-in account, in Google mode. */
   account: Account | null;
+  /** The browser's sign-in session, in Google mode; apps tie started connections to it. */
+  session?: string;
   /** False once whoever sent the request is no longer signed in; long streams ask again. */
   alive(): Promise<boolean>;
 }

@@ -1,26 +1,30 @@
 /**
- * Where connected apps plug into the web gateway. The apps layer is built separately; until it
- * is part of the build, `NO_APPS` is used and bots get no app tools and the page no app routes.
+ * Where connected apps plug into the web gateway. A seam does three things:
+ * - `attach`: gives each account's gateway the apps its bots may use;
+ * - `routes`: adds the routes that list, connect, disconnect and grant apps;
+ * - `callback`: finishes a connection when the provider sends the browser back.
  *
- * Once it is, its seam does two things:
- * - `attach`: give each gateway's sessions the bot-facing apps for its account, as in
- *   `gateway.sessions.apps = new BotApps(gateway.store, connections.runner(account.id))`;
- * - `routes`: add the routes that list, connect, finish connecting, disconnect and grant apps.
- *
- * `accountAppStores` already backs the stores that layer asks for with the account tables:
- * credentials sealed to account, kind and name; started connections held as digests; and the
- * shared limit on key checks.
+ * `connectedApps` is the seam for signed-in accounts. `NO_APPS` adds nothing, which is what the
+ * single-token mode on this machine uses. `accountAppStores` backs the stores the apps layer asks
+ * for with the account tables: credentials sealed to account, kind and name; started connections
+ * held as digests; and the shared limit on key checks.
  */
 
+import { HttpError } from "../accounts/http.ts";
 import type { Account, AccountStore } from "../accounts/store.ts";
-import type { ApiRouter } from "./context.ts";
+import { BotApps } from "../apps/access.ts";
+import { type AppConnections, type Caller, ConnectionError } from "../apps/connections.ts";
+import type { ApiRouter, Ctx } from "./context.ts";
 import type { Gateway } from "./gateway.ts";
+import { fresh, readJson } from "./router.ts";
 
 export interface AppsSeam {
   /** Called with each gateway as it is built; `account` is null on this machine's own gateway. */
   attach(gateway: Gateway, account: Account | null): void | Promise<void>;
   /** Adds the app routes to the API. */
   routes(router: ApiRouter): void;
+  /** Answers the provider's redirect to `/auth/apps/<name>/callback` for a signed-in person. */
+  callback?(ctx: Ctx, name: string, url: URL): Promise<Response>;
 }
 
 /** The seam while the apps layer is not part of the build: it adds nothing. */
@@ -75,5 +79,65 @@ export function accountAppStores(store: AccountStore): {
       },
     },
     attempts: { attempt: (account) => store.validationAttempt(account) },
+  };
+}
+
+/** Who is asking, as the apps layer needs it; only signed-in accounts have apps. */
+function caller(ctx: Ctx): Caller {
+  if (!ctx.account) throw new HttpError(404, "Apps need a signed-in account");
+  return { account: ctx.account.id, session: ctx.session ?? "", signedIn: () => ctx.alive() };
+}
+
+/** Runs one apps call, turning its refusals into HTTP errors the API already answers. */
+async function answer<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof ConnectionError) throw new HttpError(error.status, error.message);
+    throw error;
+  }
+}
+
+/** The seam for signed-in accounts, backed by their app connections. */
+export function connectedApps(connections: AppConnections): AppsSeam {
+  return {
+    attach(gateway, account) {
+      if (account)
+        gateway.sessions.apps = new BotApps(gateway.store, connections.runner(account.id));
+    },
+    routes(router) {
+      const call = <T>(ctx: Ctx, work: (who: Caller) => Promise<T>) =>
+        answer(async () => fresh(await work(caller(ctx))));
+      router
+        .add("GET", "/api/apps", (ctx) => call(ctx, (who) => connections.list(who)))
+        .add("POST", "/api/apps/telegram/confirm", (ctx) =>
+          call(ctx, (who) => connections.confirmTelegram(who)),
+        )
+        .add("POST", "/api/apps/:app/connect", (ctx, _r, params) =>
+          call(ctx, (who) => connections.connect(who, params.app as string)),
+        )
+        .add("PUT", "/api/apps/:app/key", async (ctx, request, params) => {
+          const body = await readJson(request);
+          return call(ctx, (who) => connections.saveKey(who, params.app as string, body));
+        })
+        .add("DELETE", "/api/apps/:app", (ctx, _r, params) =>
+          call(ctx, (who) => connections.disconnect(who, params.app as string)),
+        )
+        .add("PUT", "/api/apps/:app/bots/:bot", async (ctx, request, params) => {
+          const body = await readJson(request);
+          return call(ctx, (who) =>
+            connections.grant(who, params.app as string, params.bot as string, body),
+          );
+        });
+    },
+    async callback(ctx, name, url) {
+      const target = await answer(() =>
+        connections.callback(caller(ctx), name, {
+          state: url.searchParams.get("state"),
+          code: url.searchParams.get("code"),
+        }),
+      );
+      return new Response(null, { status: 303, headers: { Location: target } });
+    },
   };
 }
