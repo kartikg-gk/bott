@@ -3,6 +3,7 @@ import type { HostTool } from "../agent/session.ts";
 import { errorOutput, type ToolOutput } from "../agent/tools.ts";
 import type { Bot } from "../bots/bots.ts";
 import type { Store } from "../store/store.ts";
+import type { ExtraApps } from "./composio.ts";
 import { AppError, HttpError, NetworkError } from "./http.ts";
 import type { AppRunner } from "./registry.ts";
 import { toolOwner } from "./registry.ts";
@@ -30,15 +31,21 @@ export class BotApps {
   constructor(
     private readonly store: Store,
     readonly runner: AppRunner,
+    /** Apps outside the registry, such as Composio toolkits, granted the same way. */
+    readonly extra?: ExtraApps,
   ) {}
 
   /** The apps granted to the bot that are ready to use, in name order. */
   async enabled(botId: string): Promise<string[]> {
     const names: string[] = [];
-    for (const name of await this.store.pluginsFor(botId)) {
+    const grants = await this.store.pluginsFor(botId);
+    for (const name of grants) {
       if (this.runner.apps[name] && (await this.runner.configured(name))) names.push(name);
     }
-    return names;
+    if (this.extra) {
+      names.push(...(await this.extra.ready(grants.filter((g) => this.extra?.serves(g)))));
+    }
+    return names.sort();
   }
 
   /** The loader the bot is given; it lists app names only, so the prompt stays small. */
@@ -61,19 +68,30 @@ export class BotApps {
         tools: [],
       };
     }
-    const app = this.runner.apps[name];
-    const tools = (app?.tools ?? []).map(hostTool);
+    let tools: HostTool[];
+    if (this.extra?.serves(name)) {
+      try {
+        tools = await this.extra.load(name);
+      } catch (error) {
+        return { output: errorOutput(failure(name, error)), tools: [] };
+      }
+    } else {
+      tools = (this.runner.apps[name]?.tools ?? []).map(hostTool);
+    }
     const names = tools.map((t) => t.name).join(", ");
     return { output: say(`${name} is ready. Its tools: ${names}.`), tools };
   }
 
   owns(tool: string): boolean {
-    return toolOwner(tool, this.runner.apps) !== undefined;
+    return toolOwner(tool, this.runner.apps) !== undefined || this.extra?.owns(tool) === true;
   }
 
   /** Runs an app tool for the bot. What goes wrong comes back as a message the bot can read. */
   async call(bot: Bot, tool: string, input: unknown, signal?: AbortSignal): Promise<ToolOutput> {
     const owner = toolOwner(tool, this.runner.apps);
+    if (!owner && this.extra?.owns(tool)) {
+      return this.extra.call(await this.store.pluginsFor(bot.id), tool, input, signal);
+    }
     const spec = owner ? this.runner.apps[owner]?.tools.find((t) => t.name === tool) : undefined;
     if (!owner || !spec) return errorOutput("Unknown tool");
     if (!(await this.store.pluginsFor(bot.id)).includes(owner)) {
