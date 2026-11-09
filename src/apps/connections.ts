@@ -67,6 +67,7 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.events.freebusy",
   ]),
+  drive: google("drive", ["https://www.googleapis.com/auth/drive.readonly"]),
 };
 
 /** A saved app token, as it is stored: seconds since the epoch for `expires`. */
