@@ -1,12 +1,13 @@
 import type { App, AppContext, AppServices, Env } from "./app.ts";
 import { calendar } from "./calendar.ts";
+import { contacts } from "./contacts.ts";
 import { drive } from "./drive.ts";
 import { github } from "./github.ts";
 import { gmail } from "./gmail.ts";
 import { AppError, type Fetch, HttpError } from "./http.ts";
 
 /** Every app the server can run, in the order people see them. */
-const ORDER: App[] = [github, gmail, calendar, drive];
+const ORDER: App[] = [github, gmail, calendar, drive, contacts];
 
 /** Every app the server can run, by name. */
 export const APPS: Record<string, App> = Object.fromEntries(ORDER.map((app) => [app.name, app]));
