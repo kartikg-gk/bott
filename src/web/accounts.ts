@@ -7,6 +7,7 @@ import type { Database } from "../db/database.ts";
 import { SqliteDatabase } from "../db/sqlite.ts";
 import type { LimitsConfig } from "../limits/limits.ts";
 import type { ProviderFactory } from "../runtime/sessions.ts";
+import { type AppsSeam, NO_APPS } from "./apps.ts";
 import { Gateway } from "./gateway.ts";
 
 /** Inside each account's own instance, the page acts for this one person. */
@@ -29,8 +30,8 @@ export interface AccountGatewaysOptions {
   workers?: number;
   /** One provider for every account instead of each account's own model, as in tests. */
   fixed?: ProviderFactory;
-  /** Called with each gateway as it is built, so other parts can be added to it. */
-  prepare?: (gateway: Gateway, account: Account) => Promise<void> | void;
+  /** Connected apps for each account's bots; none until the apps layer is part of the build. */
+  apps?: AppsSeam;
 }
 
 /**
@@ -78,7 +79,7 @@ export class AccountGateways {
           ...(opts.workers === undefined ? {} : { workers: opts.workers }),
           ...(opts.computers ? { computers: opts.computers } : {}),
         });
-        await opts.prepare?.(gateway, runtime.account);
+        await (opts.apps ?? NO_APPS).attach(gateway, runtime.account);
         return gateway;
       },
     });

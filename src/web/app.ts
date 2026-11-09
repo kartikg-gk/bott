@@ -10,6 +10,7 @@ import { jobRoutes } from "./api/jobs.ts";
 import { memoryRoutes } from "./api/memory.ts";
 import { resourceRoutes } from "./api/resources.ts";
 import { runRoutes } from "./api/runs.ts";
+import { type AppsSeam, NO_APPS } from "./apps.ts";
 import type { ApiRouter, Ctx } from "./context.ts";
 import type { Gateway } from "./gateway.ts";
 import { fresh, Router, readJson } from "./router.ts";
@@ -39,8 +40,10 @@ export interface AppOptions {
   auth: TokenAuth | GoogleAuth;
   /** When set, every request must carry it in the proxy header; nothing reaches us directly. */
   proxySecret?: string | undefined;
-  /** The page served at "/". */
+  /** The page served at "/"; a short placeholder until the interface is designed. */
   page?: string;
+  /** Connected apps; none until the apps layer is part of the build. */
+  apps?: AppsSeam;
 }
 
 /** Every API route, for whichever gateway a request is resolved to. */
@@ -88,6 +91,7 @@ export function createApp(opts: AppOptions): (request: Request) => Promise<Respo
   }
   const router = apiRouter();
   if (auth.mode === "google") accountRoutes(router, auth.models);
+  (opts.apps ?? NO_APPS).routes(router);
 
   const page = () =>
     new Response(opts.page ?? "", {
