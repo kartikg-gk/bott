@@ -9,29 +9,32 @@ export const TODOIST_SCOPE = "data:read_write";
 
 /** Operations the provider documents as reads; a tool also has to say so itself to count. */
 const READS = new Set([
-  "fetch",
-  "fetch-object",
-  "find-activity",
-  "find-comments",
-  "find-completed-tasks",
-  "find-filters",
-  "find-labels",
-  "find-project-collaborators",
-  "find-projects",
-  "find-reminders",
-  "find-sections",
+  // Tasks, projects and their parts
   "find-tasks",
   "find-tasks-by-date",
+  "find-completed-tasks",
+  "find-projects",
+  "find-sections",
+  "find-labels",
+  "find-filters",
+  "find-reminders",
+  "find-comments",
+  "find-project-collaborators",
+  // Summaries and statistics
   "get-overview",
-  "get-productivity-stats",
-  "get-project-activity-stats",
   "get-project-health",
-  "get-user-status",
+  "get-project-activity-stats",
+  "get-productivity-stats",
   "get-workspace-insights",
-  "list-workspaces",
+  "get-user-status",
+  "find-activity",
+  // Lookup and account
   "search",
-  "user-info",
+  "fetch",
+  "fetch-object",
   "view-attachment",
+  "list-workspaces",
+  "user-info",
 ]);
 
 const call = { name: text, arguments: z.record(z.string(), z.unknown()) };
