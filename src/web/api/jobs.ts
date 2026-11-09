@@ -1,3 +1,19 @@
+/**
+ * Scheduled jobs of the signed-in person.
+ *
+ * Job: { id, bot, task, spec, nextRun, missed: "run" | "skip", status, running, lastStatus,
+ *        lastRun, botName }
+ * `when` is "every 30m", "daily 08:00", "at <ISO time>" or "on <event-name>".
+ *
+ * - GET   /api/jobs   -> { automation: boolean, jobs: Job[], scheduler: { heartbeat, expires } | null }
+ * - POST  /api/jobs   { bot, task, when, missed? } -> 201 Job
+ * - GET   /api/jobs/:id -> Job & { lastAnswer, wakeups: [{ event, delivery, received, claimed, finished, status }] }
+ * - PATCH /api/jobs/:id { bot?, task?, when?, missed? } -> Job; 409 while running or ended
+ * - POST  /api/jobs/:id/(pause|resume|cancel) -> Job; 409 when it cannot from where it is
+ * - PUT   /api/jobs/automation { enabled: boolean } -> { enabled }
+ * - POST  /api/jobs/events { event, delivery } -> 202 { status: "queued" | "duplicate" | "off" | "unknown", accepted }
+ */
+
 import { z } from "zod";
 import { HttpError } from "../../accounts/http.ts";
 import type { Bot } from "../../bots/bots.ts";

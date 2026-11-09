@@ -1,3 +1,27 @@
+/**
+ * The web handler: sign-in, the placeholder page and every /api route.
+ *
+ * All API answers are JSON with `Cache-Control: no-store`; a refusal is `{ error: string }`
+ * with its status (400 bad input, 401 not signed in, 403 untrusted host, origin or proxy,
+ * 404 unknown or someone else's, 405 wrong method, 409 conflict, 413 body over 2 MiB,
+ * 429 too many attempts, 500 with no detail).
+ *
+ * Token mode (one person on this machine): every /api call sends
+ * `Authorization: Bearer <BOTT_WEB_TOKEN>`.
+ *
+ * Google mode: the session cookie set by sign-in is sent by the browser. Requests must name the
+ * configured host, and anything but GET/HEAD must carry the configured Origin.
+ * - GET  /auth/login              -> 302 to Google
+ * - GET  /auth/callback           -> 302 to "/" with the session cookie set
+ * - POST /auth/logout             -> { signedOut: true }
+ * - GET  /auth/session            -> { mode: "google" | "bearer", email: string | null }
+ * - GET  /api/account/model       -> { provider, model, keys: string[] }
+ * - PUT  /api/account/model       { provider, model, key? } -> same shape as GET
+ * - DELETE /api/account/keys/:provider -> same shape as GET
+ *
+ * With BOTT_PROXY_SECRET set, every request must carry it in `X-Bott-Proxy`.
+ */
+
 import { timingSafeEqual } from "node:crypto";
 import { cookie, type GoogleLogin, SESSION_COOKIE } from "../accounts/google.ts";
 import { HttpError } from "../accounts/http.ts";

@@ -1,3 +1,22 @@
+/**
+ * The main conversation.
+ *
+ * - GET  /api/messages  -> [{ direction: "in" | "out", text, created }], newest 100, oldest first
+ * - POST /api/messages  { text, conversation? } -> 202 { id: string, run: string | null }
+ *     Text is 1 to 16000 characters. Text that is not a control name starts a run (see runs.ts);
+ *     `conversation` is the earlier messages a hosted run starts from (see earlier.ts).
+ *     409 while the account has no model chosen.
+ * - POST /api/approvals { id, allow: boolean } -> 200 { decided: true } | 404 { decided: false }
+ *     `data: "a:<id>"` is taken in place of `id`.
+ * - GET  /api/tasks     -> [{ id, status, goal (first 200 characters), bot (its name) }]
+ * - GET  /api/stream    -> server-sent events, one JSON object per `data:` line:
+ *     { type: "message", id, text }
+ *     { type: "tool", id, name, status: "running" | "finished" | "failed", path }
+ *     { type: "approval", id, run, bot, tool, preview, digest, expires }
+ *     { type: "approval_resolved", id, allowed }
+ *   with a comment line at least every 15 seconds. Only the main conversation is shown here.
+ */
+
 import { HttpError } from "../../accounts/http.ts";
 import { WEB_CHAT } from "../../store/store.ts";
 import { Queue } from "../channel.ts";

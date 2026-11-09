@@ -1,8 +1,8 @@
 /**
- * A hosted function keeps no agent session between requests, so the browser sends the
- * conversation so far with each run. Up to 20 earlier messages of up to 4000 characters each
- * are kept beside the queued message in `run_context` until the run starts, and the run then
- * begins a new session holding them.
+ * Between two requests a hosted deployment forgets every session, so the page includes the
+ * chat so far whenever it asks for a run: at most MAX_EARLIER messages, MAX_EARLIER_TEXT
+ * characters apiece. They wait in `run_context`, keyed by the inbox row, and the run opens a
+ * brand-new session that already contains them.
  */
 
 import { HttpError } from "../accounts/http.ts";
@@ -49,7 +49,7 @@ export async function saveEarlier(store: Store, inbox: bigint, earlier: Earlier[
   ]);
 }
 
-/** The earlier messages kept for a queued message, removed as they are read. */
+/** Reads and deletes, in one statement, what was stored for this inbox row. */
 export async function takeEarlier(store: Store, inbox: bigint): Promise<Earlier[]> {
   const { db, instance } = store.ctx;
   const rows = await db.query(

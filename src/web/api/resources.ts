@@ -1,3 +1,17 @@
+/**
+ * Skill packages and bot notes.
+ *
+ * Skill packages live for the whole instance (/api/skills) or for one bot
+ * (/api/bots/:bot/skills). A package is { name, files: { [path]: text } } with SKILL.md.
+ *
+ * - GET    <prefix>        -> [{ name, description, managed }]; a bot's list adds the shared ones
+ * - POST   <prefix>        { name, files } -> { saved: name }
+ * - GET    <prefix>/:name  -> { name, files }
+ * - DELETE <prefix>/:name  -> { deleted: name }
+ * - GET    /api/bots/:bot/memory -> { "PREFERENCES.md": text, "KNOWLEDGE.md": text }
+ * - PUT    /api/bots/:bot/memory { file, text } -> { saved: file }
+ */
+
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HttpError } from "../../accounts/http.ts";

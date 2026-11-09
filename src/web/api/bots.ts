@@ -1,3 +1,22 @@
+/**
+ * Bots. Temporary bots, the memory extractor among them, are never listed or found.
+ *
+ * Bot: { id, name, role, instructions, chief, temporary, created, style, voice, color, shape,
+ *        greeting: string | null, busy }
+ * Settings: { name?, role?, instructions?, style?: "direct" | "thoughtful" | "upbeat" | "custom",
+ *             voice?, color?: "#rrggbb", shape?: "orb" | "diamond" | "square" }
+ *
+ * - GET    /api/bots                 -> (Bot & { selected: boolean })[], the chief first
+ * - GET    /api/bots/unread-counts   -> { [botId]: number of its replies }
+ * - POST   /api/bots   Settings with name and role -> 201 Bot; 409 when the name is taken
+ * - PATCH  /api/bots/:bot  Settings  -> Bot; 409 while it works or when the name is taken
+ * - DELETE /api/bots/:bot            -> { deleted: id }; 409 for the chief or while it has work
+ * - POST   /api/bots/:bot/select     -> Bot; points the main conversation at it, 409 while busy
+ * - POST   /api/bots/:bot/greeting   -> { text }, written once and kept
+ * - GET    /api/bots/:bot/messages   -> [{ role, text }], newest 200, oldest first
+ * - GET    /api/bots/:bot/export     -> [{ role, text }], all of it
+ */
+
 import { z } from "zod";
 import { HttpError } from "../../accounts/http.ts";
 import type { Bot } from "../../bots/bots.ts";
@@ -173,7 +192,8 @@ async function remove(ctx: Ctx, _request: Request, params: Record<string, string
     throw new HttpError(409, (error as Error).message);
   }
   const chief = await store.chief();
-  // Every step can be repeated, and the bot row goes last, so a cut-off delete can be retried.
+  // Each statement is safe to repeat and the bots row is removed at the very end: if the
+  // delete stops half way, sending it again finishes the job.
   for (const table of BOT_ROWS) {
     await db.run(`DELETE FROM ${table} WHERE instance=? AND bot=?`, [instance, bot.id]);
   }

@@ -1,3 +1,33 @@
+/**
+ * Single runs and their journal.
+ *
+ * Run: { id, bot, status, created, finished: number | null, answer: string | null, usage? }
+ *   status is "queued", "running", "cancelling", or how it ended: "completed", "failed",
+ *   "cancelled", "stopped", "uncertain", "delivery_failed".
+ * Approval: { id, run, bot, tool, preview, digest, expires } (seconds since the epoch).
+ *
+ * - POST /api/runs { text, bot?, conversation? } -> 202 Run with `Location: /api/runs/<id>`,
+ *     or, with `Accept: text/event-stream`, the run's events in the same response.
+ *     400 for control names or unknown fields, 404 for an unknown or temporary bot, 409 no model.
+ * - GET  /api/runs                 -> Run[] still going; `?bot=<id>` narrows them
+ * - GET  /api/runs?recent=1        -> the ten most recently finished Run[]; `&bot=<id>` narrows
+ * - GET  /api/runs/:run            -> Run
+ * - GET  /api/runs/:run/activity   -> [{ seq, type: "tool_started" | "tool_finished", id, bot, tool, failed }]
+ * - POST /api/runs/:run/stop       -> Run; 409 once it has ended or is stopping
+ * - POST /api/bots/:bot/runs/:run/stop -> the same, 404 when the run is not that bot's
+ * - GET  /api/approvals            -> Approval[] waiting; `?run=<id>` narrows them
+ * - GET  /api/runs/:run/events     -> server-sent events after `Last-Event-ID` or `?after=<seq>`
+ *     Each event is `id: <seq>`, `event: <kind>`, `data: { type: <kind>, run, ...fields }`:
+ *       run_queued { bot }            run_started { bot }         assistant_text { text }
+ *       tool_started / tool_finished { id, bot, tool, failed }
+ *       approval_requested { id, bot, tool, preview, digest, expires }
+ *       approval_resolved { id, allowed }
+ *       run_usage { input, output, cache_read, cache_write, model_messages, cost_usd, reserved_micros? }
+ *       run_finished { ...Run }       (last; the stream ends after it)
+ *     A cursor older than the 512 kept events first gets `event: replay_gap` with
+ *     `{ type: "replay_gap", run, next }`. A comment line comes every 2 seconds of quiet.
+ */
+
 import { HttpError } from "../../accounts/http.ts";
 import type { Bot } from "../../bots/bots.ts";
 import { approvalView } from "../channel.ts";
