@@ -77,7 +77,8 @@ const through =
   async (session: HostedSession, a: Args): Promise<unknown> => {
     const spec = await session.lookup(String(a.name));
     const needed = accessMode(spec);
-    if (needed !== mode) throw new AppError(`That tool is a ${needed}; call it with todoist_${needed}_tool`);
+    if (needed !== mode)
+      throw new AppError(`That tool is a ${needed}; call it with todoist_${needed}_tool`);
     return session.invoke(spec, (a.arguments ?? {}) as Args);
   };
 
