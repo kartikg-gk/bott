@@ -10,7 +10,7 @@ import { FakeD1 } from "../support/fakeD1.ts";
 import { allRows, SHARED_FIXTURE, stepBack } from "./olderFile.ts";
 
 /** The versions a file can be found at and still be brought to 21 here. */
-const OLDER = [17, 18, 19, 20];
+const OLDER = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 
 type Row = Record<string, unknown>;
 
@@ -163,6 +163,24 @@ describe("upgrading a SQLite file from an older schema", () => {
     try {
       expect(after.prepare("SELECT DISTINCT version FROM inbox").all()).toEqual([{ version: 4 }]);
       expect(after.prepare("SELECT DISTINCT version FROM jobs").all()).toEqual([{ version: 0 }]);
+    } finally {
+      after.close();
+    }
+  });
+
+  it("leaves a file at the last step that worked when a later one fails", async () => {
+    const path = olderFile(11);
+    const db = new BetterSqlite3(path);
+    // The step to 13 adds this column, so finding it there already makes that step fail.
+    db.exec("ALTER TABLE jobs ADD COLUMN last_answer TEXT");
+    db.close();
+    await expect(open(path)).rejects.toThrow(/duplicate column/);
+    const after = new BetterSqlite3(path, { readonly: true });
+    try {
+      expect(after.pragma("user_version", { simple: true })).toBe(12);
+      const names = after.prepare("SELECT name FROM sqlite_master").all();
+      expect(names).toContainEqual({ name: "bot_profiles" });
+      expect(names).not.toContainEqual({ name: "scheduler_leases" });
     } finally {
       after.close();
     }

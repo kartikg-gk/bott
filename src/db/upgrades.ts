@@ -15,6 +15,94 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** How many model requests each instance made per day. */
+const requestCounts: Upgrade = {
+  reaches: 11,
+  statements: () => [
+    "CREATE TABLE model_requests(instance TEXT NOT NULL, day TEXT NOT NULL, " +
+      "count INTEGER NOT NULL, PRIMARY KEY(instance, day))",
+  ],
+};
+
+/** A bot's look and greeting, the session it is on, and its chat with the person. */
+const botProfiles: Upgrade = {
+  reaches: 12,
+  statements: () => [
+    "CREATE TABLE bot_profiles(instance TEXT,bot TEXT,style TEXT NOT NULL,voice TEXT NOT NULL," +
+      "color TEXT NOT NULL,shape TEXT NOT NULL,greeting TEXT,PRIMARY KEY(instance,bot))",
+    "CREATE TABLE bot_sessions(instance TEXT,bot TEXT,session_file TEXT,PRIMARY KEY(instance,bot))",
+    "CREATE TABLE bot_chat(id INTEGER PRIMARY KEY,instance TEXT NOT NULL,bot TEXT NOT NULL," +
+      "role TEXT NOT NULL,text TEXT NOT NULL)",
+  ],
+};
+
+/** A job's last answer, a lookup of jobs by person, and the lease the scheduler holds. */
+const schedulerLease: Upgrade = {
+  reaches: 13,
+  statements: () => [
+    "ALTER TABLE jobs ADD COLUMN last_answer TEXT",
+    "CREATE INDEX jobs_actor ON jobs(instance,actor,status)",
+    "CREATE TABLE scheduler_leases(instance TEXT PRIMARY KEY, owner TEXT NOT NULL, " +
+      "heartbeat REAL NOT NULL, expires REAL NOT NULL)",
+  ],
+};
+
+/** The web page's thread per bot, and the journal of each run the page starts. */
+const webRuns: Upgrade = {
+  reaches: 14,
+  statements: () => [
+    "CREATE TABLE web_bot_routes(instance TEXT NOT NULL, actor INTEGER NOT NULL, " +
+      "bot TEXT NOT NULL, thread INTEGER NOT NULL, " +
+      "PRIMARY KEY(instance,actor,bot), UNIQUE(instance,actor,thread))",
+    "CREATE TABLE web_runs(instance TEXT NOT NULL, id TEXT NOT NULL, inbox INTEGER NOT NULL, " +
+      "bot TEXT NOT NULL, actor INTEGER NOT NULL, answer TEXT, finished REAL, " +
+      "PRIMARY KEY(instance,id), UNIQUE(instance,inbox))",
+    "CREATE INDEX web_runs_active ON web_runs(instance,actor,finished)",
+    "CREATE TABLE web_run_events(instance TEXT NOT NULL, run TEXT NOT NULL, " +
+      "seq INTEGER NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, " +
+      "PRIMARY KEY(instance,run,seq), " +
+      "FOREIGN KEY(instance,run) REFERENCES web_runs(instance,id) ON DELETE CASCADE)",
+  ],
+};
+
+/** Which copy of the memory index belongs to the instance. */
+const indexEpochs: Upgrade = {
+  reaches: 15,
+  statements: () => [
+    "CREATE TABLE memory_index_epochs(instance TEXT PRIMARY KEY, epoch TEXT NOT NULL)",
+  ],
+};
+
+/** Jobs woken by named events: the switch, each delivery seen, and the queue of wake-ups. */
+const eventWakeups: Upgrade = {
+  reaches: 16,
+  statements: () => [
+    "CREATE TABLE job_automation(instance TEXT PRIMARY KEY, enabled INTEGER NOT NULL)",
+    "CREATE TABLE job_event_receipts(instance TEXT NOT NULL, actor INTEGER NOT NULL, " +
+      "event TEXT NOT NULL, delivery TEXT NOT NULL, received REAL NOT NULL, " +
+      "PRIMARY KEY(instance,actor,event,delivery))",
+    "CREATE TABLE job_wakeups(id INTEGER PRIMARY KEY AUTOINCREMENT, instance TEXT NOT NULL, " +
+      "actor INTEGER NOT NULL, job INTEGER NOT NULL, event TEXT NOT NULL, " +
+      "delivery TEXT NOT NULL, received REAL NOT NULL, claimed REAL, finished REAL, " +
+      "status TEXT NOT NULL DEFAULT 'queued')",
+    "CREATE INDEX job_wakeup_queue ON job_wakeups(instance,job,status,id)",
+    // A job that is cancelled or rescheduled drops the wake-ups still waiting for it.
+    "CREATE TRIGGER cancel_queued_wakeups AFTER UPDATE OF status,spec ON jobs " +
+      "WHEN NEW.status='cancelled' OR NEW.spec<>OLD.spec BEGIN " +
+      "UPDATE job_wakeups SET status='cancelled',finished=unixepoch() " +
+      "WHERE instance=NEW.instance AND job=NEW.id AND status='queued'; END",
+  ],
+};
+
+/** What each instance spent on models per day, in millionths of a dollar. */
+const spendCounts: Upgrade = {
+  reaches: 17,
+  statements: () => [
+    "CREATE TABLE model_spend(instance TEXT NOT NULL, day TEXT NOT NULL, " +
+      "micros INTEGER NOT NULL, PRIMARY KEY(instance,day))",
+  ],
+};
+
 /** Tables whose rows count their writes, so an update only lands on the version it read. */
 const COUNTED = ["jobs", "web_runs", "approvals", "inbox", "delegations", "scheduler_leases"];
 
@@ -64,7 +152,19 @@ const runContext: Upgrade = {
 };
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
-export const UPGRADES: readonly Upgrade[] = [writeCounters, hostedFiles, leases, runContext];
+export const UPGRADES: readonly Upgrade[] = [
+  requestCounts,
+  botProfiles,
+  schedulerLease,
+  webRuns,
+  indexEpochs,
+  eventWakeups,
+  spendCounts,
+  writeCounters,
+  hostedFiles,
+  leases,
+  runContext,
+];
 
 /** The oldest schema version a file can be at and still be brought up to date here. */
 export function oldestUpgradable(): number {

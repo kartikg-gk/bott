@@ -65,7 +65,7 @@ const SETTLED = [
  * The file as written, then copies of it stepped back to older schemas and upgraded here before
  * the same checks run, so an upgraded file must behave like one written at 21.
  */
-const SOURCES = [SCHEMA_VERSION, 20];
+const SOURCES = [SCHEMA_VERSION, 20, 13];
 
 describe.each(SOURCES)("a database file written before the switch, from schema %i", (version) => {
   let source = FIXTURE;
