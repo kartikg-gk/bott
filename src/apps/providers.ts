@@ -197,6 +197,7 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.events.freebusy",
   ]),
+  tasks: googleApp("tasks", ["https://www.googleapis.com/auth/tasks"]),
   drive: googleApp("drive", ["https://www.googleapis.com/auth/drive.readonly"]),
   contacts: googleApp("contacts", ["https://www.googleapis.com/auth/contacts.readonly"]),
   notion,
