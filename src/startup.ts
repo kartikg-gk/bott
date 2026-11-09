@@ -15,7 +15,7 @@ import { withRetry } from "./agent/providers/retry.ts";
 import type { FetchFn, ModelProvider, StreamEvent } from "./agent/providers/types.ts";
 import { AppConnections } from "./apps/connections.ts";
 import { type Config, ConfigError, type Env, PROVIDER_KEYS } from "./config.ts";
-import { createDatabase, type Database } from "./db/database.ts";
+import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { ensureSchema } from "./db/schema.ts";
 import { ModelLimits } from "./limits/limits.ts";
 import type { ProviderFactory, RuntimeConfig } from "./runtime/sessions.ts";
@@ -219,7 +219,12 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
 
 /** Opens the database, brings its schema up to date and builds the server on it. */
 export async function startServer(config: Config, opts: StartOptions = {}): Promise<Server> {
-  const db = opts.db ?? createDatabase(config, opts.env ?? process.env);
+  const env = opts.env ?? process.env;
+  // A hosted function's disk is gone at its next cold start, so its data must live in D1.
+  if (config.hosted && !opts.db && !env.CLOUDFLARE_D1_DATABASE_ID?.trim()) {
+    throw new ConfigError(`Hosted mode keeps its data in D1; set ${D1_VARIABLES.join(", ")}`);
+  }
+  const db = opts.db ?? createDatabase(config, env);
   try {
     await ensureSchema(db);
     return config.auth === "google"

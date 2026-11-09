@@ -13,7 +13,8 @@
     "test": "vitest run",
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p .",
+    "build": "tsc -p tsconfig.build.json",
+    "vercel-build": "npm run build && node -e \"require('node:fs').mkdirSync('public',{recursive:true})\"",
     "start": "node dist/src/bin.js run",
     "mem0:check": "tsx scripts/mem0-check.ts"
   },

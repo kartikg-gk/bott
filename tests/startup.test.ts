@@ -154,3 +154,12 @@ describe("the model provider in token mode", () => {
     }
   });
 });
+
+describe("a hosted server", () => {
+  it("will not keep its data on a disk that does not last", async () => {
+    const env = { BOTT_HOSTED: "1", BOTT_INSTANCE: "ab".repeat(16) };
+    await expect(startServer(readConfig(env), { env })).rejects.toThrow(
+      /CLOUDFLARE_D1_DATABASE_ID/,
+    );
+  });
+});
