@@ -7,6 +7,7 @@ import type { Account } from "../accounts/store.ts";
 import { botRoutes } from "./api/bots.ts";
 import { chatRoutes } from "./api/chat.ts";
 import { jobRoutes } from "./api/jobs.ts";
+import { memoryRoutes } from "./api/memory.ts";
 import { resourceRoutes } from "./api/resources.ts";
 import { runRoutes } from "./api/runs.ts";
 import type { ApiRouter, Ctx } from "./context.ts";
@@ -50,6 +51,7 @@ export function apiRouter(): ApiRouter {
   botRoutes(router);
   jobRoutes(router);
   resourceRoutes(router);
+  memoryRoutes(router);
   return router;
 }
 

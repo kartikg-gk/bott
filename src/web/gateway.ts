@@ -3,6 +3,12 @@ import type { Account } from "../accounts/store.ts";
 import type { ComputerFactory } from "../computers/index.ts";
 import type { Database } from "../db/database.ts";
 import type { ModelLimits } from "../limits/limits.ts";
+import type { MemoryConfig } from "../memory/config.ts";
+import { MemoryControls, projectOf } from "../memory/controls.ts";
+import type { Memory } from "../memory/memory.ts";
+import { openMemory } from "../memory/open.ts";
+import { MemoryRuntime, sessionModelCall } from "../memory/runtime.ts";
+import type { Embedder } from "../memory/vectors.ts";
 import { BackgroundAgents } from "../runtime/agents.ts";
 import { Dispatcher } from "../runtime/dispatcher.ts";
 import { type ProviderFactory, type RuntimeConfig, SessionManager } from "../runtime/sessions.ts";
@@ -32,6 +38,13 @@ export interface GatewayOptions {
   limits?: ModelLimits;
   /** Runs wait until the signed-in account has chosen a model and saved a key. */
   requireAccountModel?: boolean;
+  /** Long-term memory; left out or off, nothing is recalled or learned. */
+  memory?: {
+    config: MemoryConfig;
+    env?: Record<string, string | undefined>;
+    /** Turns text into vectors; the configured embeddings service when left out. */
+    embedder?: Embedder;
+  };
 }
 
 /** One instance's whole runtime, as the web endpoints use it. */
@@ -47,6 +60,10 @@ export class Gateway {
     readonly hosted: boolean,
     readonly runtime: RuntimeConfig,
     private readonly accountModel: boolean,
+    /** What the person can see and change in their long-term memory. */
+    readonly memory: MemoryControls,
+    /** Recall and learning around each exchange, when memory is on. */
+    readonly learning: MemoryRuntime | undefined,
   ) {}
 
   static async open(opts: GatewayOptions): Promise<Gateway> {
@@ -55,8 +72,32 @@ export class Gateway {
     const journal = new RunJournal(store);
     const { limits } = opts;
     const channel = new WebChannel(journal);
+    const project = projectOf(opts.runtime);
+    let memory: Memory | null = null;
+    let learning: MemoryRuntime | undefined;
+    if (opts.memory?.config.enabled) {
+      const settings = opts.memory;
+      memory = await openMemory(store, settings.config, settings.env ?? process.env, {
+        ...(settings.embedder ? { embedder: settings.embedder } : {}),
+      });
+      if (memory) {
+        learning = new MemoryRuntime({
+          store,
+          memory,
+          config: settings.config,
+          project,
+          // Extraction runs on the hidden extractor bot, one exchange at a time.
+          model: sessionModelCall(store, sessions, settings.config.extractionSeconds),
+          notify: async (route, text) => {
+            await store.logMessage(route, text, "out");
+            await channel.send(route, text);
+          },
+        });
+      }
+    }
     const dispatcher = new Dispatcher(store, sessions, channel, {
       workers: opts.workers,
+      exchange: learning,
       wrap: limits ? (work) => limits.operation(() => work()) : undefined,
       observer: {
         started: (item, bot) => journal.emit(item.run as string, "run_started", { bot }),
@@ -88,6 +129,8 @@ export class Gateway {
       opts.hosted ?? false,
       opts.runtime,
       opts.requireAccountModel ?? false,
+      new MemoryControls(store, memory, project),
+      learning,
     );
   }
 
@@ -132,6 +175,7 @@ export class Gateway {
   async close(): Promise<void> {
     this.channel.close();
     this.journal.close();
+    await this.learning?.settled();
     await this.agents.stop();
     await this.sessions.close();
   }
