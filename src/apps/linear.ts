@@ -17,45 +17,45 @@ const issueOptional = Object.keys(issueInput);
 const tools = [
   tool(
     "linear_list_teams",
-    "Show the Linear teams you can reach and their workflow states.",
+    "Teams the person belongs to in Linear, each with its workflow states.",
     { cursor: text },
     { optional: "all" },
   ),
   tool(
     "linear_list_issues",
-    "Show recent Linear issues, for one team if given.",
+    "The most recently changed issues, across teams or for one team.",
     { team_id: text, cursor: text },
     { optional: "all" },
   ),
   tool(
     "linear_search_issues",
-    "Search Linear issues for text, for one team if given.",
+    "Finds issues whose text matches; a team can narrow it.",
     { query: text, team_id: text, cursor: text },
     { optional: ["team_id", "cursor"] },
   ),
-  tool("linear_get_issue", "Read a Linear issue by its UUID or identifier.", { issue_id: text }),
+  tool("linear_get_issue", "One issue, by its UUID or a key like ENG-12.", { issue_id: text }),
   tool(
     "linear_create_issue",
-    "Open a Linear issue in the team chosen.",
+    "Files a new issue in one team.",
     { team_id: text, ...issueInput },
     { optional: issueOptional.filter((k) => k !== "title"), write: true, review: true },
   ),
   tool(
     "linear_update_issue",
-    "Change chosen fields of a Linear issue.",
+    "Changes only the given fields of an issue.",
     { issue_id: text, ...issueInput },
     { optional: issueOptional, write: true, review: true },
   ),
   tool(
     "linear_add_comment",
-    "Add a Markdown comment to a Linear issue.",
+    "Adds a comment, written in Markdown, to an issue.",
     { issue_id: text, body: text },
     { write: true, review: true },
   ),
 ];
 
-const ISSUE = "id identifier title url priority state { id name } team { id key }";
-const PAGE = "pageInfo { hasNextPage endCursor }";
+const ISSUE = "id identifier url title priority team { id key } state { id name }";
+const PAGE = "pageInfo { endCursor hasNextPage }";
 const INPUT_NAMES: Record<string, string> = {
   title: "title",
   description: "description",
@@ -68,25 +68,25 @@ const INPUT_NAMES: Record<string, string> = {
 const QUERIES: Record<string, [string, string]> = {
   linear_list_teams: [
     "teams",
-    `query Teams($after: String) { teams(first: 10, after: $after) { nodes { id key name ` +
+    `query ListTeams($after: String) { teams(first: 10, after: $after) { nodes { id key name ` +
       `states(first: 15) { nodes { id name type } ${PAGE} } } ${PAGE} } }`,
   ],
   linear_list_issues: [
     "issues",
-    `query Issues($after: String, $filter: IssueFilter) { issues(first: 20, after: $after, ` +
+    `query RecentIssues($filter: IssueFilter, $after: String) { issues(first: 20, after: $after, ` +
       `filter: $filter, orderBy: updatedAt) { nodes { ${ISSUE} } ${PAGE} } }`,
   ],
   linear_search_issues: [
     "searchIssues",
-    `query SearchIssues($term: String!, $after: String, $filter: IssueFilter) { ` +
-      `searchIssues(term: $term, first: 20, after: $after, filter: $filter) { ` +
+    `query FindIssues($term: String!, $filter: IssueFilter, $after: String) { ` +
+      `searchIssues(term: $term, filter: $filter, first: 20, after: $after) { ` +
       `nodes { ${ISSUE} } ${PAGE} } }`,
   ],
   linear_get_issue: [
     "issue",
-    `query Issue($id: String!) { issue(id: $id) { ${ISSUE} description dueDate ` +
-      `assignee { id name } project { id name } comments(first: 10) { ` +
-      `nodes { id body user { name } createdAt } ${PAGE} } } }`,
+    `query OneIssue($id: String!) { issue(id: $id) { ${ISSUE} dueDate description ` +
+      `project { id name } assignee { id name } comments(first: 10) { ` +
+      `nodes { id createdAt user { name } body } ${PAGE} } } }`,
   ],
 };
 
@@ -94,20 +94,20 @@ const MUTATIONS: Record<string, [string, string, string]> = {
   linear_create_issue: [
     "issueCreate",
     "issue",
-    `mutation Create($input: IssueCreateInput!) { issueCreate(input: $input) { success ` +
+    `mutation NewIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success ` +
       `issue { ${ISSUE} } } }`,
   ],
   linear_update_issue: [
     "issueUpdate",
     "issue",
-    `mutation Update($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, ` +
+    `mutation EditIssue($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, ` +
       `input: $input) { success issue { ${ISSUE} } } }`,
   ],
   linear_add_comment: [
     "commentCreate",
     "comment",
-    "mutation Comment($input: CommentCreateInput!) { commentCreate(input: $input) { success " +
-      "comment { id url } } }",
+    "mutation AddComment($input: CommentCreateInput!) { commentCreate(input: $input) { " +
+      "comment { url id } success } }",
   ],
 };
 
@@ -129,7 +129,7 @@ export const linear: App = {
       const data = result?.data?.[field];
       if (result?.errors || !data || typeof data !== "object") {
         throw new AppError(
-          "Linear sent back a partial result; look at the target before trying again.",
+          "Linear's answer was missing data. Look at the issue before trying again.",
         );
       }
       return data as Item;
@@ -155,14 +155,17 @@ export const linear: App = {
       for (const [key, target] of Object.entries(INPUT_NAMES)) {
         if (key in a) payload[target] = a[key];
       }
-      if (Object.keys(payload).length === 0) throw new AppError("Give at least one field of the issue");
+      if (Object.keys(payload).length === 0)
+        throw new AppError("Name at least one issue field to set");
     }
     const variables: Item = { input: payload };
     if (name === "linear_create_issue") payload.teamId = a.team_id;
     if (name === "linear_update_issue") variables.id = a.issue_id;
     const result = await query(field, document, variables);
     if (result.success !== true || !result[node] || typeof result[node] !== "object") {
-      throw new AppError("Linear did not confirm the change; look at the issue before trying again.");
+      throw new AppError(
+        "Linear did not say the change was saved. Look at the issue before trying again.",
+      );
     }
     return jsonOutput(result[node]);
   },

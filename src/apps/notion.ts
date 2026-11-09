@@ -9,26 +9,26 @@ const API = "https://api.notion.com/v1";
 const tools = [
   tool(
     "notion_search",
-    "Search the Notion pages and data sources shared with this app by title.",
+    "Finds pages and data sources shared with this connection, by title.",
     { query: text, cursor: text },
     { optional: "all" },
   ),
-  tool("notion_get_page", "Read the details and properties of a Notion page.", { page_id: text }),
+  tool("notion_get_page", "A page's details and property values.", { page_id: text }),
   tool(
     "notion_list_blocks",
-    "Show the child blocks under a page or block.",
+    "The blocks directly inside a page or block.",
     { block_id: text, cursor: text },
     { optional: ["cursor"] },
   ),
   tool(
     "notion_create_page",
-    "Make a Notion page below a shared page or inside a shared data source.",
+    "Adds a page beneath a shared page or as a row of a shared data source.",
     { parent_id: text, parent_type: z.enum(["page", "data_source"]), title: text, text },
     { optional: ["parent_type", "text"], write: true, review: true },
   ),
   tool(
     "notion_append_text",
-    "Add a paragraph of plain text to the end of a Notion page or block.",
+    "Adds a paragraph of plain text at the end of a page or block.",
     { block_id: text, text },
     { write: true, review: true },
   ),
@@ -45,7 +45,7 @@ export function notionId(value: unknown): string {
     .replace(/^\{(.*)\}$/, "$1")
     .replaceAll("-", "");
   if (!/^[0-9a-f]{32}$/i.test(raw)) {
-    throw new AppError("Give a Notion ID returned by search or by listing blocks");
+    throw new AppError("Use an ID that a search or block list gave back");
   }
   const hex = raw.toLowerCase();
   return [
@@ -140,7 +140,7 @@ export const notion: App = {
           ([, value]) => value?.type === "title",
         )?.[0];
         if (titleProperty === undefined) {
-          throw new AppError("The chosen Notion data source has no title property");
+          throw new AppError("That data source has no title column to name the page with");
         }
       }
       const body: Item = {

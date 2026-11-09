@@ -31,7 +31,7 @@ describe("notion", () => {
     expect(APPS.notion).toBe(notion);
     expect(notionId(PAGE.replaceAll("-", "").toUpperCase())).toBe(PAGE);
     expect(notionId(`{${PAGE}}`)).toBe(PAGE);
-    expect(() => notionId("../pages")).toThrow("Give a Notion ID");
+    expect(() => notionId("../pages")).toThrow("Use an ID that a search");
     expect(notion.tools.filter((t) => !t.readOnly).every((t) => t.review)).toBe(true);
   });
 
@@ -138,10 +138,10 @@ describe("linear", () => {
     });
     success = false;
     await expect(apps.run("linear_create_issue", { team_id: "t1", title: "Bug" })).rejects.toThrow(
-      "Linear did not confirm the change; look at the issue before trying again.",
+      "Linear did not say the change was saved. Look at the issue before trying again.",
     );
     await expect(apps.run("linear_update_issue", { issue_id: "i9" })).rejects.toThrow(
-      "Give at least one field of the issue",
+      "Name at least one issue field to set",
     );
   });
 
@@ -150,7 +150,7 @@ describe("linear", () => {
       [`POST ${LINEAR}`]: () => json({ errors: [{ message: "x" }], data: null }),
     });
     await expect(apps.run("linear_get_issue", { issue_id: "ENG-1" })).rejects.toThrow(
-      "Linear sent back a partial result",
+      "answer was missing data",
     );
   });
 });
