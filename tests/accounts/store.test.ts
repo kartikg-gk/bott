@@ -41,8 +41,8 @@ describe("master key", () => {
   });
 });
 
-describe("rows sealed earlier", () => {
-  it("open in a file written by the earlier gateway", async () => {
+describe("rows sealed before this release", () => {
+  it("open from an existing account file", async () => {
     const db = new SqliteDatabase(":memory:");
     await db.run(`ATTACH DATABASE '${FIXTURE.replaceAll("'", "''")}' AS old`);
     const store = await AccountStore.open(db, "realm-fixture", KEY);
@@ -86,7 +86,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     return String((await store.session(token))?.id);
   }
 
-  it("creates the account tables with their earlier columns and can open twice", async () => {
+  it("creates the account tables with the columns existing files have, and can open twice", async () => {
     const { db } = await fresh();
     await AccountStore.open(db, "realm-1", KEY);
     const columns = async (table: string) =>

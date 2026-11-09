@@ -59,7 +59,7 @@ describe("opening the account store", () => {
     ).rejects.toThrow(`${MASTER_KEY_VARIABLE} must encode 32 random bytes as base64`);
   });
 
-  it("opens on the gateway database when hosted, where earlier sealed rows still open", async () => {
+  it("opens on the gateway database when hosted, where rows sealed before still open", async () => {
     const fake = new FakeD1();
     const db = fake.database();
     const opened = await openAccountStore({

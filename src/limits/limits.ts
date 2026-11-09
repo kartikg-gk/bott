@@ -38,8 +38,8 @@ const operations = new AsyncLocalStorage<{ instance: string; run: RunBudget }>()
 
 /**
  * Daily request and spend limits shared by every process using the database, and per-run
- * limits held in memory. Each daily limit is checked in the same statement that counts
- * against it, so concurrent runs cannot pass it together.
+ * limits held in memory. A daily count only goes up through a guarded write that refuses once
+ * the cap is reached, so two runs racing for the last request cannot both get it.
  */
 export class ModelLimits {
   readonly config: LimitsConfig;
@@ -113,7 +113,7 @@ export class ModelLimits {
         [this.instance, day, micros, micros, limit, limit],
       );
       if (debited.length === 0) {
-        // A refused request is not counted, as if both had been one transaction.
+        // The request counted above never went out, so its count is handed back.
         await this.db.run("UPDATE model_requests SET count=count-1 WHERE instance=? AND day=?", [
           this.instance,
           day,
