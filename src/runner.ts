@@ -37,6 +37,8 @@ export interface RunnerOptions {
   ttl?: number;
   /** The scheduler owner recorded on claims; a fresh one by default. */
   owner?: string;
+  /** Most jobs running at once; more due jobs wait for a free place. */
+  workers?: number;
   /** Stops a runner that is not running once; its running jobs end interrupted. */
   signal?: AbortSignal;
 }
@@ -115,6 +117,8 @@ class Runner {
   /** Renews both holds, stops cancelled runs, then claims and starts what is due. */
   async tick(): Promise<void> {
     await this.watch();
+    const room = (this.opts.workers ?? Number.POSITIVE_INFINITY) - this.active.size;
+    if (room <= 0) return;
     const now = this.store.ctx.clock();
     const busy = new Set<string>();
     for (const running of this.active.values()) busy.add(running.job.bot);
@@ -125,6 +129,7 @@ class Runner {
       owner: this.owner,
       next: nextRun,
       busyBots: [...busy],
+      ...(Number.isFinite(room) ? { limit: room } : {}),
     });
     for (const job of due) this.launch(job);
   }

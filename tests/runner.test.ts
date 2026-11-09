@@ -243,6 +243,30 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(prompts).toHaveLength(1);
   });
 
+  it("runs no more jobs at once than its workers allow", async () => {
+    const { store, addJob, prompts, sessions, sink } = await setup(["one", "two"]);
+    const other = await store.createBot({ name: "Ada", role: "helper" });
+    await addJob();
+    const second = await addJob({ bot: other.id });
+    const run = () =>
+      runRunner({
+        store,
+        sessions,
+        sink,
+        instance: "main",
+        once: true,
+        poll: POLL,
+        owner: "runner-a",
+        workers: 1,
+      });
+    await run();
+    expect(prompts).toHaveLength(1);
+    expect((await store.job(second))?.lastRun).toBeNull();
+    await run();
+    expect(prompts).toHaveLength(2);
+    expect((await store.job(second))?.lastStatus).toBe("completed");
+  });
+
   it("a one-off job finishes as completed and is not run again", async () => {
     const { store, sink, addJob, once, clock, prompts } = await setup(["sent the note"]);
     const id = await addJob({ spec: "once" });

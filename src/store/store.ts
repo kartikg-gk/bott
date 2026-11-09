@@ -259,7 +259,13 @@ export class Store {
 
   claimDue(
     now: number,
-    opts: { owner: string; next: jobs.NextRun; chat?: number; busyBots?: string[] },
+    opts: {
+      owner: string;
+      next: jobs.NextRun;
+      chat?: number;
+      busyBots?: string[];
+      limit?: number;
+    },
   ) {
     return jobs.claimDue(this.ctx, now, opts);
   }

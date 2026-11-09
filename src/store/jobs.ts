@@ -168,12 +168,13 @@ async function automationOn(ctx: StoreContext): Promise<boolean> {
  * jobs alone. The claim also moves a scheduled job to the time `next` gives, or ends it when
  * `next` gives null, so a run cut short by a crash is not run again. A busy bot gets no job, and
  * each bot gets at most one per call. A job set to skip missed runs that is more than
- * MISSED_GRACE late is not run: it moves on and records the miss.
+ * MISSED_GRACE late is not run: it moves on and records the miss. At most `limit` jobs are
+ * claimed when it is given.
  */
 export async function claimDue(
   ctx: StoreContext,
   now: number,
-  opts: { owner: string; next: NextRun; chat?: number; busyBots?: string[] },
+  opts: { owner: string; next: NextRun; chat?: number; busyBots?: string[]; limit?: number },
 ): Promise<ClaimedJob[]> {
   if (!(await automationOn(ctx))) return [];
   const { db, instance } = ctx;
@@ -197,6 +198,8 @@ export async function claimDue(
     "(SELECT 1 FROM scheduler_leases WHERE instance=? AND owner=? AND expires>?)";
   const claimed: ClaimedJob[] = [];
   for (const row of rows) {
+    // Past the limit nothing more is claimed; what is left stays due for a later call.
+    if (opts.limit !== undefined && claimed.length >= opts.limit) break;
     const found = toJob(row);
     const before = { nextRun: found.nextRun, lastRun: found.lastRun };
     if (busy.has(found.bot)) continue;
