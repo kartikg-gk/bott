@@ -1,6 +1,7 @@
 import type { App, AppContext, AppServices, Env } from "./app.ts";
 import { calendar } from "./calendar.ts";
 import { contacts } from "./contacts.ts";
+import { docs } from "./docs.ts";
 import { Documents } from "./documents.ts";
 import { drive } from "./drive.ts";
 import { github } from "./github.ts";
@@ -23,6 +24,7 @@ const ORDER: App[] = [
   calendar,
   tasks,
   drive,
+  docs,
   contacts,
   notion,
   linear,

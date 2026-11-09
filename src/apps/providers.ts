@@ -199,6 +199,7 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
   ]),
   tasks: googleApp("tasks", ["https://www.googleapis.com/auth/tasks"]),
   drive: googleApp("drive", ["https://www.googleapis.com/auth/drive.readonly"]),
+  docs: googleApp("docs", ["https://www.googleapis.com/auth/documents"]),
   contacts: googleApp("contacts", ["https://www.googleapis.com/auth/contacts.readonly"]),
   notion,
   linear,
