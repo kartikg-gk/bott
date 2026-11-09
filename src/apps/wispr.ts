@@ -16,13 +16,13 @@ export const WISPR_SCOPES = ["offline_access", "openid"];
 const tools = [
   tool(
     "wispr_list_tools",
-    "Show the Wispr Flow tools, all read-only; give a tool name for its input schema.",
+    "The Wispr Flow tools that only read. Name one to get its input schema.",
     { cursor: text, name: text },
     { optional: "all" },
   ),
   tool(
     "wispr_call_tool",
-    "Use a Wispr Flow tool found earlier to read notes, meetings or calendar data.",
+    "Runs one of those read-only tools, for notes, meetings or calendar data.",
     { name: text, arguments: z.record(z.string(), z.unknown()) },
     { optional: ["arguments"] },
   ),
@@ -43,7 +43,7 @@ export async function registerWisprClient(fetcher: Fetch, callback: string): Pro
     !(resource.authorization_servers ?? []).includes(ISSUER) ||
     !WISPR_SCOPES.every((s) => (resource.scopes_supported ?? []).includes(s))
   ) {
-    throw new AppError("Wispr Flow described its resource in an unexpected way");
+    throw new AppError("Wispr Flow described its tool server in a way this app does not trust");
   }
   const server = await request<Item>(
     fetcher,
@@ -63,7 +63,7 @@ export async function registerWisprClient(fetcher: Fetch, callback: string): Pro
     !(server.code_challenge_methods_supported ?? []).includes("S256") ||
     !(server.token_endpoint_auth_methods_supported ?? []).includes("none")
   ) {
-    throw new AppError("Wispr Flow described its authorization in an unexpected way");
+    throw new AppError("Wispr Flow described its sign-in server in a way this app does not trust");
   }
   const client = await request<Item>(fetcher, "POST", REGISTRATION_URL, {
     json: {
@@ -85,7 +85,7 @@ export async function registerWisprClient(fetcher: Fetch, callback: string): Pro
     (client.token_endpoint_auth_method ?? "none") !== "none" ||
     !(client.redirect_uris ?? [callback]).includes(callback)
   ) {
-    throw new AppError("Wispr Flow sent back a client registration that is not valid");
+    throw new AppError("Wispr Flow's answer to the client registration was not usable");
   }
   return id;
 }
@@ -115,7 +115,8 @@ export const wispr: App = {
         return { tools: page.tools.filter(readable).map(summary), nextCursor: page.nextCursor };
       }
       const spec = await session.lookup(String(a.name));
-      if (!readable(spec)) throw new AppError("That Wispr Flow tool can change data");
+      if (!readable(spec))
+        throw new AppError("That Wispr Flow tool can change things, so it is not offered");
       if (listing) return { ...summary(spec), inputSchema: spec.inputSchema ?? null };
       return session.invoke(spec, (a.arguments ?? {}) as Record<string, unknown>);
     });

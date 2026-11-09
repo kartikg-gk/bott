@@ -53,7 +53,7 @@ describe("wispr", () => {
       hasOtherContent: false,
     });
     await expect(apps.run("wispr_call_tool", { name: "erase" })).rejects.toThrow(
-      "That Wispr Flow tool can change data",
+      "That Wispr Flow tool can change things, so it is not offered",
     );
   });
 
