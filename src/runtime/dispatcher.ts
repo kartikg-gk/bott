@@ -2,6 +2,7 @@ import type { SessionEvent } from "../agent/session.ts";
 import type { InboxItem, InboxStatus } from "../store/inbox.ts";
 import type { Route } from "../store/routes.ts";
 import { type Store, WEB_CHAT } from "../store/store.ts";
+import { traced } from "../tracing.ts";
 import { SetupError } from "./errors.ts";
 import { BotBusy, type EventSource, type Origin, type SessionManager } from "./sessions.ts";
 import type { ApprovalCard, Sink } from "./sink.ts";
@@ -307,7 +308,7 @@ export class Dispatcher {
       done: Promise.resolve(),
     };
     this.active.set(route.id, active);
-    const work = () => this.run(active);
+    const work = () => traced("prompt", () => this.run(active));
     active.done = (this.wrap ? this.wrap(work) : work()).finally(() => {
       this.active.delete(route.id);
     });

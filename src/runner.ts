@@ -14,6 +14,7 @@ import { nextRun } from "./schedule/when.ts";
 import type { Route } from "./store/routes.ts";
 import type { ClaimedJob, Store } from "./store/store.ts";
 import type { DelegationStatus } from "./store/work.ts";
+import { traced } from "./tracing.ts";
 
 /** How long the runner's hold lasts without renewal, in seconds. */
 const RUNNER_SECONDS = 60;
@@ -356,11 +357,13 @@ class Runner {
       }
       const conversation = route;
       const work = () =>
-        sessions.background(conversation, bot, job.task, {
-          readOnly: false,
-          signal: running.controller.signal,
-          unattended: true,
-        });
+        traced("job", () =>
+          sessions.background(conversation, bot, job.task, {
+            readOnly: false,
+            signal: running.controller.signal,
+            unattended: true,
+          }),
+        );
       const result = await (this.opts.wrap ? this.opts.wrap(work) : work());
       answer = result.text;
       status = running.reason ?? result.outcome;

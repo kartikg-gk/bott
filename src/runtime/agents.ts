@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Bot } from "../bots/bots.ts";
 import type { Store } from "../store/store.ts";
 import type { WorkStatus } from "../store/work.ts";
+import { traced } from "../tracing.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { Sink } from "./sink.ts";
 import { type Agents, MAX_ANSWER, type SpawnRequest } from "./team.ts";
@@ -191,12 +192,14 @@ export class BackgroundAgents implements Agents {
     let status: WorkStatus = "failed";
     let answer = "";
     try {
-      const result = await this.sessions.background(route, bot, goal, {
-        policy: writer ? "auto" : "deny",
-        readOnly: !writer,
-        signal: running.controller.signal,
-        onEvent: this.sessions.relayApprovals(route, request.actor),
-      });
+      const result = await traced("background", () =>
+        this.sessions.background(route, bot, goal, {
+          policy: writer ? "auto" : "deny",
+          readOnly: !writer,
+          signal: running.controller.signal,
+          onEvent: this.sessions.relayApprovals(route, request.actor),
+        }),
+      );
       answer = result.text;
       status = result.outcome === "completed" ? "completed" : this.stopped(running, timedOut);
     } catch {

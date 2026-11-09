@@ -37,6 +37,7 @@ import { type ComputerSettings, computerSettings } from "../computers/settings.t
 import { Lease } from "../db/leases.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
+import { observeEvent } from "../tracing.ts";
 import { SetupError } from "./errors.ts";
 import { answerOwnCall, OWN_TOOL_NAMES, ownTools } from "./ownTools.ts";
 import { type Agents, answerTeamCall, jobTools, teamTools } from "./team.ts";
@@ -834,6 +835,7 @@ export class SessionManager {
       let final = "";
       live.listener = (event) => {
         if (event.type === "response") return;
+        observeEvent(live.session, event);
         try {
           onEvent?.(event, source);
         } catch {

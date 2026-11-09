@@ -118,6 +118,13 @@ export const SETTINGS: Setting[] = [
   { name: "BOTT_APPROVAL_SECONDS", about: "Seconds an approval waits", example: "300" },
   { name: "BOTT_WORKERS", about: "Most runs or jobs at once" },
   {
+    name: "BOTT_LANGFUSE_URL",
+    about:
+      "Langfuse address to send run traces to (names, counts and timings only); off when empty",
+  },
+  { name: "BOTT_LANGFUSE_PUBLIC_KEY", about: "Langfuse public key, with BOTT_LANGFUSE_URL" },
+  { name: "BOTT_LANGFUSE_SECRET_KEY", about: "Langfuse secret key, with BOTT_LANGFUSE_URL" },
+  {
     name: "BOTT_THINKING",
     about: "How hard models think before answering: off, minimal, low, medium, high, xhigh or max",
   },

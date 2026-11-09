@@ -19,6 +19,7 @@ import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { ensureSchema } from "./db/schema.ts";
 import { ModelLimits } from "./limits/limits.ts";
 import type { ProviderFactory, RuntimeConfig } from "./runtime/sessions.ts";
+import { setTraceExporter, TraceExporter } from "./tracing.ts";
 import { AccountGateways } from "./web/accounts.ts";
 import { createApp } from "./web/app.ts";
 import { accountAppStores, connectedApps } from "./web/apps.ts";
@@ -224,14 +225,28 @@ export async function startServer(config: Config, opts: StartOptions = {}): Prom
   if (config.hosted && !opts.db && !env.CLOUDFLARE_D1_DATABASE_ID?.trim()) {
     throw new ConfigError(`Hosted mode keeps its data in D1; set ${D1_VARIABLES.join(", ")}`);
   }
+  // Read first, so a wrong trace setting stops the start before anything opens.
+  const tracer = TraceExporter.fromEnv(env);
   const db = opts.db ?? createDatabase(config, env);
+  let server: Server;
   try {
     await ensureSchema(db);
-    return config.auth === "google"
-      ? await googleServer(config, db, opts)
-      : await tokenServer(config, db, opts);
+    server =
+      config.auth === "google"
+        ? await googleServer(config, db, opts)
+        : await tokenServer(config, db, opts);
   } catch (error) {
     await db.close();
     throw error;
   }
+  if (!tracer) return server;
+  setTraceExporter(tracer);
+  return {
+    ...server,
+    close: async () => {
+      await server.close();
+      await tracer.close();
+      setTraceExporter(null);
+    },
+  };
 }

@@ -16,6 +16,7 @@ import { RunUsage } from "./limits/usage.ts";
 import type { ProviderFactory } from "./runtime/sessions.ts";
 import { startServer } from "./startup.ts";
 import { Store, WEB_CHAT } from "./store/store.ts";
+import { traced } from "./tracing.ts";
 import { SkillError, SkillFolder } from "./web/skillFiles.ts";
 
 /** What these commands need from the shell. */
@@ -94,7 +95,8 @@ export async function task(io: ExtraIo, config: Config, args: string[]): Promise
       return done;
     };
     try {
-      const done = gateway.limits ? await gateway.limits.operation(work) : await work();
+      const limited = gateway.limits;
+      const done = await traced("one-shot", () => (limited ? limited.operation(work) : work()));
       status = stop.signal.aborted ? "timed_out" : done.outcome;
       answer = stop.signal.aborted ? "The task ran out of time" : done.text;
     } finally {
