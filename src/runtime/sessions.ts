@@ -378,13 +378,19 @@ export class SessionManager {
    * Runs a background task on the bot's saved session and saves it afterwards, as a delegation
    * does. A read-only run is given only the tools that change nothing. Without a policy the
    * gateway's own applies. Aborting `signal` stops the run. Throws `BotBusy` when the bot is
-   * already working.
+   * already working. A detached run starts from an empty session and leaves neither a saved
+   * session nor chat lines behind.
    */
   async background(
     route: Route,
     bot: Pick<Bot, "id">,
     task: string,
-    opts: PromptOptions & { policy?: Policy | undefined; readOnly: boolean; signal: AbortSignal },
+    opts: PromptOptions & {
+      policy?: Policy | undefined;
+      readOnly: boolean;
+      signal: AbortSignal;
+      detached?: boolean;
+    },
   ): Promise<Answer> {
     const target = await this.store.bot(bot.id);
     if (!target) throw new Error("The bot was deleted");
@@ -400,7 +406,12 @@ export class SessionManager {
     route: Route,
     target: Bot,
     task: string,
-    opts: PromptOptions & { policy?: Policy | undefined; readOnly: boolean; signal?: AbortSignal },
+    opts: PromptOptions & {
+      policy?: Policy | undefined;
+      readOnly: boolean;
+      signal?: AbortSignal;
+      detached?: boolean;
+    },
   ): Promise<Answer> {
     const releaseBot = await this.holdBot(target.id, false);
     let id: string | undefined;
@@ -410,10 +421,13 @@ export class SessionManager {
     const stop = () => void live?.session.request("abort").catch(() => {});
     opts.signal?.addEventListener("abort", stop, { once: true });
     try {
+      const detached = opts.detached === true;
       const saved =
-        this.config.sessionsDir === null ? null : await savedFile(this.store, target.id);
+        this.config.sessionsDir === null || detached
+          ? null
+          : await savedFile(this.store, target.id);
       id = saved ? basename(saved, ".jsonl") : randomUUID();
-      sessionFile = saved ?? (await this.newFile(id));
+      sessionFile = saved ?? (detached ? null : await this.newFile(id));
       if (!saved && sessionFile) await rememberSession(this.store, target.id, { sessionFile });
       release = await this.lockFor(sessionKey(id)).acquire();
       // A cached copy would miss this run's messages; it reloads on its next use.
@@ -427,12 +441,14 @@ export class SessionManager {
       });
       live.busy = true;
       this.delegations.add(live);
-      await recordChat(this.store, target.id, "user", task);
+      if (!detached) await recordChat(this.store, target.id, "user", task);
       // Nothing awaits between this check and the prompt, so a stop cannot fall between them.
       if (opts.signal?.aborted) return { text: "", outcome: "cancelled" };
       const answer = await this.run(live, task, opts.onEvent);
-      await rememberSession(this.store, target.id, { sessionFile });
-      await recordChat(this.store, target.id, "assistant", answer.text);
+      if (!detached) {
+        await rememberSession(this.store, target.id, { sessionFile });
+        await recordChat(this.store, target.id, "assistant", answer.text);
+      }
       return answer;
     } finally {
       opts.signal?.removeEventListener("abort", stop);
