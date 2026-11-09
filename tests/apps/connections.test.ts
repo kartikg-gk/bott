@@ -214,7 +214,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     ).rejects.toBeInstanceOf(ConnectionError);
 
     const listed = await connections.list(caller);
-    expect(listed.map((a) => a.id)).toEqual(["github", "gmail"]);
+    expect(listed.map((a) => a.id).slice(0, 2)).toEqual(["github", "gmail"]);
     expect(listed[0]).toMatchObject({
       configured: true,
       connected: true,

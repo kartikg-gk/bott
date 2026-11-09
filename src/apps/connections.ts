@@ -62,6 +62,11 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
     clientId: GMAIL_CLIENT_ID,
     secret: GMAIL_CLIENT_SECRET,
   },
+  calendar: google("calendar", [
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
+  ]),
 };
 
 /** A saved app token, as it is stored: seconds since the epoch for `expires`. */
