@@ -54,6 +54,7 @@ export function teamTools(): HostTool[] {
       description: "Make a new bot. Do this only when the user asks for it or agrees to it.",
       input: SCHEMAS.create_bot,
       readOnly: false,
+      review: true,
     },
     {
       name: "update_bot",
@@ -61,6 +62,7 @@ export function teamTools(): HostTool[] {
         "Edit another bot's description or instructions. Do this only when the user asks for it.",
       input: SCHEMAS.update_bot,
       readOnly: false,
+      review: true,
     },
     {
       name: "delegate_task",
@@ -124,6 +126,7 @@ export function jobTools(): HostTool[] {
         "Only the chief can name a different bot.",
       input: SCHEMAS.schedule_job,
       readOnly: false,
+      review: true,
     },
     {
       name: "list_scheduled_jobs",
@@ -136,6 +139,7 @@ export function jobTools(): HostTool[] {
       description: "Stop a scheduled job when asked to.",
       input: SCHEMAS.cancel_scheduled_job,
       readOnly: false,
+      review: true,
     },
   ];
 }

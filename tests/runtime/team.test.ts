@@ -7,7 +7,7 @@ import { emptyUsage } from "../../src/agent/transcript.ts";
 import type { Bot } from "../../src/bots/bots.ts";
 import type { Database } from "../../src/db/database.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
-import { answerTeamCall, teamTools } from "../../src/runtime/team.ts";
+import { answerTeamCall, jobTools, teamTools } from "../../src/runtime/team.ts";
 import { Store } from "../../src/store/store.ts";
 import { type Backend, backends, database } from "../support/fakeD1.ts";
 
@@ -97,6 +97,18 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     for (const name of names) expect(seen[1]?.tools).not.toContain(name);
     const approval = Object.fromEntries(teamTools().map((t) => [t.name, !t.readOnly]));
     expect(approval).toMatchObject({ create_bot: true, update_bot: true, delegate_task: false });
+  });
+
+  it("changes that outlast the run always ask the person, whatever the policy", () => {
+    const reviewed = [...teamTools(), ...jobTools()]
+      .filter((t) => t.review === true)
+      .map((t) => t.name);
+    expect(reviewed.sort()).toEqual([
+      "cancel_scheduled_job",
+      "create_bot",
+      "schedule_job",
+      "update_bot",
+    ]);
   });
 
   it("create_bot then list_bots shows it", async () => {
