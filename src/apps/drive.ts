@@ -18,14 +18,15 @@ const EXPORTS: Record<string, string> = {
 export const driveTools = [
   tool(
     "drive_search",
-    "Find Drive files with a Drive query; files in the trash are left out.",
+    "Finds files the person can open, using Drive's query syntax. Files in the trash are left out.",
     { query: text, page_token: text, drive_id: text },
     { optional: "all" },
   ),
   tool(
     "drive_read_file",
-    "Read a stored file or an export of a Google file, passing nextOffset and version for later pages. " +
-      "Use base64 for binary content. A Google Sheets CSV export holds only the first sheet.",
+    "Reads a stored file, or a Google file converted to another type, one page at a time; " +
+      "send nextOffset and version back for the next page. Binary files need base64. " +
+      "A spreadsheet read as CSV gives only its first sheet.",
     {
       file_id: text,
       format: z.enum(["text", "base64"]),
@@ -77,15 +78,15 @@ export async function mediaPage(
   if (reply.status === 206) {
     const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(reply.headers.get("content-range") ?? "");
     if (exporting || !match || Number(match[1]) !== start) {
-      throw new AppError("Drive answered with a content range that was not asked for");
+      throw new AppError("Drive answered with a byte range that was not asked for");
     }
     [first, last, total] = [Number(match[1]), Number(match[2]), Number(match[3])];
     if (!(first <= last && last < total) || last >= first + limit) {
-      throw new AppError("Drive answered with a content range that was not asked for");
+      throw new AppError("Drive answered with a byte range that was not asked for");
     }
     skip = 0;
   } else if (!exporting && start) {
-    throw new AppError("Drive ignored the byte range that was asked for");
+    throw new AppError("Drive sent the whole file instead of the byte range asked for");
   }
   const parts: Buffer[] = [];
   let size = 0;
@@ -112,7 +113,7 @@ export async function mediaPage(
   if (skip) throw new AppError("That offset is past the end of the file");
   const data = Buffer.concat(parts);
   if (total !== undefined && data.length !== last - first + 1) {
-    throw new AppError("Drive answered with a partial content range");
+    throw new AppError("Drive's byte range header was missing parts");
   }
   const more = total !== undefined ? start + data.length < total : data.length > limit;
   return { data: data.subarray(0, limit), more };
@@ -132,7 +133,7 @@ export function unfinishedTail(data: Buffer): number {
 
 export async function fileMetadata(api: GoogleApi, fileId: string): Promise<Item> {
   return api.get<Item>(`${DRIVE_API}/${segment(fileId)}`, {
-    fields: "id,name,mimeType,version,size,capabilities(canDownload),shortcutDetails(targetId)",
+    fields: "id,name,size,mimeType,version,shortcutDetails(targetId),capabilities(canDownload)",
     supportsAllDrives: "true",
   });
 }
@@ -149,7 +150,7 @@ async function search(api: GoogleApi, a: Item): Promise<Item> {
   const params: Record<string, string | number> = {
     q: a.query ? `trashed = false and (${a.query})` : "trashed = false",
     pageSize: 20,
-    fields: "nextPageToken,incompleteSearch,files(id,name,mimeType,size,version,webViewLink)",
+    fields: "files(id,name,size,mimeType,version,webViewLink),incompleteSearch,nextPageToken",
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
   };
@@ -166,15 +167,15 @@ async function readFile(api: GoogleApi, a: Item): Promise<Item> {
   if (mime === `${GOOGLE_FILE}shortcut`) return { shortcut: metadata.shortcutDetails?.targetId };
   const version = metadata.version;
   if (a.version !== undefined && a.version !== version) {
-    throw new AppError("The file has changed since; start again at byte zero to read the new one.");
+    throw new AppError("The file has a new version now. Start again at offset 0.");
   }
   if (metadata.capabilities?.canDownload === false) {
-    throw new AppError("Drive does not let this file be downloaded");
+    throw new AppError("The owner of this file has turned off downloads");
   }
   const exporting = mime.startsWith(GOOGLE_FILE);
   const start: number = a.offset ?? 0;
   if (start && version && !a.version) {
-    throw new AppError("When reading on, pass the version that the first page gave");
+    throw new AppError("After the first page, send back the version that page gave");
   }
   const format: string = a.format ?? "text";
   const limit = format === "base64" ? 9000 : 2500;
@@ -182,28 +183,29 @@ async function readFile(api: GoogleApi, a: Item): Promise<Item> {
   if (exporting) {
     const fallback = EXPORTS[mime];
     if (fallback === undefined && !("export_mime" in a)) {
-      throw new AppError("There is no standard export for this kind of Google file");
+      throw new AppError("This kind of Google file needs export_mime to say what to convert it to");
     }
     mime = a.export_mime ?? fallback;
     url += "/export";
     params = { mimeType: mime };
     if (start > 10 * 1024 ** 2)
-      throw new AppError("That offset is beyond what Drive lets an export hold");
+      throw new AppError("Drive cannot convert that much of the file; the offset is too far in");
   } else {
     if ("export_mime" in a) {
-      throw new AppError("An export type can only be given for native Google file kinds");
+      throw new AppError("export_mime only works on files made in Google's own editors");
     }
     params = { alt: "media", supportsAllDrives: "true" };
   }
   const size = !exporting && metadata.size !== undefined ? Number(metadata.size) : undefined;
-  if (size !== undefined && start > size) throw new AppError("That offset is past the end of the file");
+  if (size !== undefined && start > size)
+    throw new AppError("That offset is past the end of the file");
   const page =
     size === start
       ? { data: Buffer.alloc(0), more: false }
       : await mediaPage(api, url, params, start, limit, exporting);
   if (version && (page.more || start)) {
     if ((await currentVersion(api, fileId)) !== version) {
-      throw new AppError("The file has changed since; start again at byte zero to read the new one.");
+      throw new AppError("The file has a new version now. Start again at offset 0.");
     }
   }
   let content: string;
@@ -217,7 +219,7 @@ async function readFile(api: GoogleApi, a: Item): Promise<Item> {
         page.data.subarray(0, page.data.length - pending),
       );
     } catch {
-      throw new AppError("Pass a byte cursor that was returned, or use base64 for binary content");
+      throw new AppError("Use an offset a page gave back, or read binary files as base64");
     }
   }
   return {
@@ -245,9 +247,10 @@ async function extractDocument(
   if (mime === `${GOOGLE_FILE}shortcut`) return { shortcut: metadata.shortcutDetails?.targetId };
   const version = metadata.version;
   if (metadata.capabilities?.canDownload === false) {
-    throw new AppError("Drive does not let this file be downloaded");
+    throw new AppError("The owner of this file has turned off downloads");
   }
-  if (!EXTRACTABLE.has(mime)) throw new AppError("Pick a stored PDF, PNG or JPEG to read");
+  if (!EXTRACTABLE.has(mime))
+    throw new AppError("Only stored PDF, PNG and JPEG files can be turned into text");
   if (Number(metadata.size ?? 0) > MAX_DOCUMENT_BYTES) {
     throw new AppError("Attachments over 8 MiB are not read");
   }
@@ -256,7 +259,7 @@ async function extractDocument(
   const { data, more } = await mediaPage(api, url, params, 0, MAX_DOCUMENT_BYTES, false);
   if (more) throw new AppError("Attachments over 8 MiB are not read");
   if (version && (await currentVersion(api, fileId)) !== version) {
-    throw new AppError("The attachment changed while downloading; please retry.");
+    throw new AppError("The file changed while it was being fetched. Try once more.");
   }
   return { id: fileId, version: version ?? null, ...(await documents.read(data, mime, a)) };
 }

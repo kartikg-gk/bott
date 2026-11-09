@@ -64,7 +64,7 @@ describe("drive", () => {
     expect(first.nextOffset).toBe(2499);
     expect(first.version).toBe("5");
     await expect(apps.run("drive_read_file", { file_id: "f1", offset: 2499 })).rejects.toThrow(
-      "pass the version that the first page gave",
+      "send back the version that page gave",
     );
     const second = parse(
       await apps.run("drive_read_file", { file_id: "f1", offset: 2499, version: "5" }),
@@ -83,7 +83,7 @@ describe("drive", () => {
     version = "6";
     await expect(
       apps.run("drive_read_file", { file_id: "f1", offset: 2499, version: "5" }),
-    ).rejects.toThrow("The file has changed since; start again at byte zero to read the new one.");
+    ).rejects.toThrow("The file has a new version now. Start again at offset 0.");
     await expect(
       apps.run("drive_read_file", { file_id: "f1", offset: 99999, version: "6" }),
     ).rejects.toThrow("That offset is past the end of the file");
@@ -110,10 +110,10 @@ describe("drive", () => {
     });
     expect(fetcher.seen.at(-1)?.url.searchParams.get("mimeType")).toBe("text/plain");
     await expect(apps.run("drive_read_file", { file_id: "form" })).rejects.toThrow(
-      "There is no standard export for this kind of Google file",
+      "This kind of Google file needs export_mime to say what to convert it to",
     );
     await expect(apps.run("drive_read_file", { file_id: "locked" })).rejects.toThrow(
-      "Drive does not let this file be downloaded",
+      "The owner of this file has turned off downloads",
     );
     expect(parse(await apps.run("drive_read_file", { file_id: "link" }))).toEqual({
       shortcut: "t",
