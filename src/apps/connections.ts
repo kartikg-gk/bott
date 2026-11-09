@@ -7,6 +7,7 @@ import { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GOOGLE_TOKEN_URL } from "./gmail.
 import { AppError, basic, type Fetch, HttpError } from "./http.ts";
 import { NOTION_VERSION } from "./notion.ts";
 import { AppRunner } from "./registry.ts";
+import { TODOIST_MCP_URL, TODOIST_SCOPE } from "./todoist.ts";
 
 /** A refusal the web layer turns into an HTTP status with this message. */
 export class ConnectionError extends Error {
@@ -84,10 +85,19 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
     secret: "BOTT_LINEAR_CLIENT_SECRET",
     scopes: ["read", "issues:create", "comments:create"],
   },
+  todoist: {
+    authUrl: "https://todoist.com/oauth/authorize",
+    tokenUrl: "https://todoist.com/oauth/access_token",
+    clientId: "BOTT_TODOIST_CLIENT_ID",
+    secret: "BOTT_TODOIST_CLIENT_SECRET",
+    scopes: [TODOIST_SCOPE],
+  },
 };
 
 /** Fields some token endpoints need on every exchange. */
-const EXTRA_TOKEN_FIELDS: Record<string, Record<string, string>> = {};
+const EXTRA_TOKEN_FIELDS: Record<string, Record<string, string>> = {
+  todoist: { resource: TODOIST_MCP_URL },
+};
 
 /** A saved app token, as it is stored: seconds since the epoch for `expires`. */
 export interface SavedToken {
@@ -430,6 +440,8 @@ export class AppConnections {
       });
     } else if (name === "linear") {
       Object.assign(query, { scope: [...app.scopes].sort().join(","), actor: "user" });
+    } else if (name === "todoist") {
+      Object.assign(query, { scope: TODOIST_SCOPE, resource: TODOIST_MCP_URL });
     }
     return { url: `${app.authUrl}?${new URLSearchParams(query)}` };
   }
@@ -497,6 +509,16 @@ export class AppConnections {
         "https://api.linear.app/oauth/revoke",
         form({ token: String(token[kind]), token_type_hint: `${kind}_token` }),
       );
+    } else if (name === "todoist") {
+      const current = await this.refresh(account, name, token);
+      const fields = this.clientFields(name);
+      reply = await this.fetch("https://todoist.com/api/v1/revoke", {
+        ...form({ token: current.access, token_type_hint: "access_token" }),
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          authorization: basic(fields.client_id, fields.client_secret),
+        },
+      });
     } else if (app.tokenUrl === GOOGLE_TOKEN_URL) {
       reply = await this.fetch("https://oauth2.googleapis.com/revoke", {
         method: "POST",
