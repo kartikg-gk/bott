@@ -99,6 +99,16 @@ export interface ExchangeHooks {
   after(route: Route, item: InboxItem, answer: string): void;
 }
 
+/** Told how each run the page started goes; only items that carry a run name are reported. */
+export interface RunObserver {
+  /** The run reached its session, on this bot. */
+  started(item: InboxItem, bot: string): Promise<void>;
+  /** The answer about to be delivered. */
+  answered(item: InboxItem, text: string): Promise<void>;
+  /** The run's work is over, however it ended. */
+  closed(item: InboxItem): Promise<void>;
+}
+
 /** Turns waiting inbox messages into runs, one at a time per route, and delivers each answer. */
 export class Dispatcher {
   private readonly active = new Map<number, Active>();
@@ -107,15 +117,21 @@ export class Dispatcher {
   private readonly loose = new Set<Promise<void>>();
   private readonly workers: number;
   private readonly exchange: ExchangeHooks | undefined;
+  private readonly observer: RunObserver | undefined;
   private ticking: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly store: Store,
     private readonly sessions: SessionManager,
     private readonly sink: Sink,
-    opts: { workers?: number | undefined; exchange?: ExchangeHooks } = {},
+    opts: {
+      workers?: number | undefined;
+      exchange?: ExchangeHooks | undefined;
+      observer?: RunObserver | undefined;
+    } = {},
   ) {
     this.exchange = opts.exchange;
+    this.observer = opts.observer;
     const workers = opts.workers ?? Number.POSITIVE_INFINITY;
     if (!(workers >= 1)) throw new Error("workers must be at least 1");
     this.workers = workers;
@@ -175,6 +191,19 @@ export class Dispatcher {
   async stop(route: Route): Promise<{ stopped: boolean; cleared: number }> {
     const cleared = await this.store.clearRouteQueue(route);
     const active = this.active.get(route.id);
+    await this.halt(route, active);
+    return { stopped: active !== undefined, cleared };
+  }
+
+  /** Stops the run the page named, leaving the rest of its route's queue. False when not running here. */
+  async stopRun(run: string): Promise<boolean> {
+    const active = [...this.active.values()].find((a) => a.item.run === run);
+    if (!active) return false;
+    await this.halt(active.route, active);
+    return true;
+  }
+
+  private async halt(route: Route, active: Active | undefined): Promise<void> {
     if (active) active.stopped = true;
     // Cards of the stopped run, its delegations' among them. Background agents carry on.
     const closing = [...this.cards].filter(
@@ -189,7 +218,6 @@ export class Dispatcher {
       await this.resolve(id, false, "stopped");
     }
     if (active) await active.done;
-    return { stopped: active !== undefined, cleared };
   }
 
   /** Adds a message to the route's running prompt. False when nothing is running. */
@@ -276,6 +304,7 @@ export class Dispatcher {
     const { item, route } = active;
     try {
       if (!(await this.store.mark(item, "running"))) return;
+      if (item.run) await this.observer?.started(item, active.bot).catch(() => {});
       if (active.stopped) {
         await this.store.mark(item, "cancelled");
         return;
@@ -289,9 +318,11 @@ export class Dispatcher {
         onEvent: (e, source) => this.observe(active, e, source),
       });
       await this.settleChores(active);
-      await this.store.mark(item, "delivering");
+      // A run stopped from the page has moved on; its answer is not delivered.
+      if (!(await this.store.mark(item, "delivering"))) return;
       let text = answer.text || `Run ${answer.outcome}; no assistant text returned.`;
       if (answer.outcome !== "completed") text += `\n[Run ${answer.outcome}]`;
+      if (item.run) await this.observer?.answered(item, text).catch(() => {});
       try {
         await this.deliver(route, text);
         await this.store.mark(item, answer.outcome satisfies InboxStatus);
@@ -324,6 +355,7 @@ export class Dispatcher {
         await this.respond(open, false);
         await this.resolve(id, false, "run_closed");
       }
+      if (item.run) await this.observer?.closed(item).catch(() => {});
     }
   }
 
@@ -360,7 +392,7 @@ export class Dispatcher {
     source: EventSource,
   ): void {
     try {
-      this.sink.event(origin.route, e);
+      this.sink.event(origin.route, e, { run: active?.item.run ?? null, bot: source.bot });
     } catch {
       // A failing page must not stop the run.
     }

@@ -18,10 +18,17 @@ export interface ApprovalCard {
   bot: string | null;
 }
 
+/** Which run an event belongs to and which bot's session sent it. */
+export interface EventContext {
+  /** The page's run, when the event comes from one. */
+  run: string | null;
+  bot: string;
+}
+
 /** Where answers, live events and approval requests for a conversation go. */
 export interface Sink {
   send(route: Route, text: string): Promise<void>;
-  event(route: Route, e: SessionEvent): void;
+  event(route: Route, e: SessionEvent, context?: EventContext): void;
   approval(route: Route, card: ApprovalCard): Promise<void>;
   /** Told once a shown approval is settled, however it was settled. */
   resolved?(route: Route, card: ApprovalCard, allow: boolean): Promise<void>;

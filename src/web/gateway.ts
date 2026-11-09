@@ -5,6 +5,7 @@ import { Dispatcher } from "../runtime/dispatcher.ts";
 import { type ProviderFactory, type RuntimeConfig, SessionManager } from "../runtime/sessions.ts";
 import { Store } from "../store/store.ts";
 import { WebChannel } from "./channel.ts";
+import { RunJournal } from "./journal.ts";
 
 /** The person the web page acts for when nothing else says so. */
 export const DEFAULT_ACTOR = 1;
@@ -33,6 +34,7 @@ export class Gateway {
     readonly dispatcher: Dispatcher,
     readonly agents: BackgroundAgents,
     readonly channel: WebChannel,
+    readonly journal: RunJournal,
     readonly actor: number,
     readonly hosted: boolean,
   ) {}
@@ -40,8 +42,21 @@ export class Gateway {
   static async open(opts: GatewayOptions): Promise<Gateway> {
     const store = await Store.open(opts.db, opts.instance, opts.clock ? { clock: opts.clock } : {});
     const sessions = new SessionManager(opts.runtime, store, opts.providers, opts.computers);
-    const channel = new WebChannel();
-    const dispatcher = new Dispatcher(store, sessions, channel, { workers: opts.workers });
+    const journal = new RunJournal(store);
+    const channel = new WebChannel(journal);
+    const dispatcher = new Dispatcher(store, sessions, channel, {
+      workers: opts.workers,
+      observer: {
+        started: (item, bot) => journal.emit(item.run as string, "run_started", { bot }),
+        answered: (item, text) => journal.answer(item.run as string, text),
+        closed: async (item) => {
+          const run = item.run as string;
+          const usage = channel.takeUsage(run);
+          if (usage.model_messages > 0) await journal.emit(run, "run_usage", usage);
+          await journal.finish(run);
+        },
+      },
+    });
     // A finished background task queues a report for the chief; a look at the inbox picks it up.
     const agents = new BackgroundAgents(store, sessions, channel, {
       onReport: () => void dispatcher.tick().catch(() => {}),
@@ -52,9 +67,21 @@ export class Gateway {
       dispatcher,
       agents,
       channel,
+      journal,
       opts.actor ?? DEFAULT_ACTOR,
       opts.hosted ?? false,
     );
+  }
+
+  /**
+   * Stops the person's run: a queued one never starts, a running one is aborted, and either
+   * ends cancelled. False when the run is not theirs or already over or stopping.
+   */
+  async stopRun(run: string, actor: number): Promise<boolean> {
+    if (!(await this.journal.cancel(run, actor))) return false;
+    await this.dispatcher.stopRun(run);
+    await this.journal.finish(run);
+    return true;
   }
 
   /** Starts whatever waiting work can start now. */
@@ -65,6 +92,7 @@ export class Gateway {
   /** Ends live streams and stops the sessions; running work ends with them. */
   async close(): Promise<void> {
     this.channel.close();
+    this.journal.close();
     await this.agents.stop();
     await this.sessions.close();
   }
