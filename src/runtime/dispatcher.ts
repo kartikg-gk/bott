@@ -57,6 +57,10 @@ export const COULD_NOT_START = "The task could not start, and nothing was run. T
 
 /** Run approvals are not tied to a run of their own, so they all carry this run name. */
 const SESSION_RUN = "native";
+/** How often, in milliseconds, runs here look for answers and stops given in other processes. */
+const WATCH_MS = 1000;
+/** Statuses another process gives a run it stopped. */
+const STOPPED_ELSEWHERE = new Set(["cancelling", "cancelled"]);
 
 /** Whether a waiting message names a control rather than asking something. */
 function isControl(item: InboxItem): boolean {
@@ -124,6 +128,9 @@ export class Dispatcher {
   private readonly observer: RunObserver | undefined;
   private readonly wrap: (<T>(work: () => Promise<T>) => Promise<T>) | undefined;
   private ticking: Promise<unknown> = Promise.resolve();
+  private readonly watchMs: number;
+  private watcher: NodeJS.Timeout | undefined;
+  private watching = false;
 
   constructor(
     private readonly store: Store,
@@ -135,9 +142,12 @@ export class Dispatcher {
       observer?: RunObserver | undefined;
       /** Runs each prompt's whole run inside it, such as an account's per-run limits. */
       wrap?: (<T>(work: () => Promise<T>) => Promise<T>) | undefined;
+      /** How often runs here look for answers and stops from other processes; 1 s by default. */
+      watchMs?: number | undefined;
     } = {},
   ) {
     this.wrap = opts.wrap;
+    this.watchMs = opts.watchMs ?? WATCH_MS;
     this.exchange = opts.exchange;
     this.observer = opts.observer;
     const workers = opts.workers ?? Number.POSITIVE_INFINITY;
@@ -183,14 +193,24 @@ export class Dispatcher {
       .map((open) => open.card);
   }
 
+  /** Whether the approval was asked for here and is still open here, even while being decided. */
+  holds(approvalId: string): boolean {
+    return this.cards.has(approvalId);
+  }
+
   /**
    * Answers an approval for the person who was asked. Returns false, changing nothing, when the
    * approval is unknown, someone else's, already being decided or its run is stopping. An
    * expired approval is denied whatever the answer.
+   *
+   * An approval another process asked for is answered in the database; that process picks the
+   * answer up within a second and passes it to its run. There a late answer returns false, and
+   * the asking process denies the approval when its time runs out.
    */
   async decide(approvalId: string, allow: boolean, actor: number): Promise<boolean> {
     const open = this.cards.get(approvalId);
-    if (!open || open.deciding || open.actor !== actor || open.active?.stopped) {
+    if (!open) return (await this.store.decide(approvalId, allow, "user", actor)) === "decided";
+    if (open.deciding || open.actor !== actor || open.active?.stopped) {
       return false;
     }
     open.deciding = true;
@@ -217,6 +237,11 @@ export class Dispatcher {
   }
 
   private async halt(route: Route, active: Active | undefined): Promise<void> {
+    if (active?.stopped) {
+      // Already stopping, here or because another process asked; wait for it to end.
+      await active.done;
+      return;
+    }
     if (active) active.stopped = true;
     // Cards of the stopped run, its delegations' among them. Background agents carry on.
     const closing = [...this.cards].filter(
@@ -308,6 +333,7 @@ export class Dispatcher {
       done: Promise.resolve(),
     };
     this.active.set(route.id, active);
+    this.watch();
     const work = () => traced("prompt", () => this.run(active));
     active.done = (this.wrap ? this.wrap(work) : work()).finally(() => {
       this.active.delete(route.id);
@@ -471,12 +497,70 @@ export class Dispatcher {
     };
     this.cards.set(card.id, open);
     this.arm(open);
+    this.watch();
     try {
       await this.sink.approval(route, card);
     } catch {
       open.deciding = true;
       await this.respond(open, false);
       await this.resolve(card.id, false, "delivery_failed");
+    }
+  }
+
+  /**
+   * While runs or cards are open here, looks in the database now and then for what other
+   * processes did to them: a hosted page's next request may reach any process, so an answer or a
+   * stop can be recorded somewhere else than where the run is.
+   */
+  private watch(): void {
+    if (this.watcher) return;
+    this.watcher = setInterval(() => void this.look(), this.watchMs);
+    this.watcher.unref();
+  }
+
+  private async look(): Promise<void> {
+    if (this.watching) return;
+    if (this.active.size === 0 && this.cards.size === 0) {
+      clearInterval(this.watcher);
+      this.watcher = undefined;
+      return;
+    }
+    this.watching = true;
+    try {
+      await this.answeredElsewhere();
+      await this.stoppedElsewhere();
+    } catch {
+      // The database may be briefly out of reach; the next look tries again.
+    } finally {
+      this.watching = false;
+    }
+  }
+
+  /** Passes on decisions written by other processes to the sessions waiting here. */
+  private async answeredElsewhere(): Promise<void> {
+    const waiting = [...this.cards].filter(([, open]) => !open.deciding).map(([id]) => id);
+    for (const [id, allowed] of await this.store.approvalDecisions(waiting)) {
+      const open = this.cards.get(id);
+      if (!open || open.deciding) continue;
+      open.deciding = true;
+      const settle = async () => {
+        await this.respond(open, allowed);
+        // The record already holds the decision; this closes the card and tells the page.
+        await this.resolve(id, allowed, "user");
+      };
+      this.chore(open.active, settle());
+    }
+  }
+
+  /** Stops runs here that a request in another process stopped. */
+  private async stoppedElsewhere(): Promise<void> {
+    const going = [...this.active.values()].filter((active) => !active.stopped);
+    const found = await this.store.inboxStatuses(going.map((active) => active.item.id));
+    for (const active of going) {
+      const status = found.get(active.item.id);
+      if (status !== undefined && STOPPED_ELSEWHERE.has(status) && !active.stopped) {
+        void this.halt(active.route, active).catch(() => {});
+      }
     }
   }
 

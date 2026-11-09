@@ -30,7 +30,6 @@
 
 import { HttpError } from "../../accounts/http.ts";
 import type { Bot } from "../../bots/bots.ts";
-import { approvalView } from "../channel.ts";
 import type { ApiRouter, Ctx } from "../context.ts";
 import type { RunView } from "../journal.ts";
 import { fresh, readObject } from "../router.ts";
@@ -169,7 +168,7 @@ async function stop(ctx: Ctx, _request: Request, params: Record<string, string>)
 async function approvals(ctx: Ctx, request: Request): Promise<Response> {
   const run = new URL(request.url).searchParams.get("run") || undefined;
   if (run) await lookup(ctx, run);
-  return fresh(ctx.gateway.dispatcher.approvals(ctx.actor, run).map(approvalView));
+  return fresh(await ctx.gateway.approvals(ctx.actor, run));
 }
 
 export function runRoutes(router: ApiRouter): void {

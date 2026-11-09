@@ -15,7 +15,7 @@ import { Dispatcher } from "../runtime/dispatcher.ts";
 import { type ProviderFactory, type RuntimeConfig, SessionManager } from "../runtime/sessions.ts";
 import type { Route } from "../store/routes.ts";
 import { Store } from "../store/store.ts";
-import { WebChannel } from "./channel.ts";
+import { approvalView, WebChannel } from "./channel.ts";
 import { parseEarlier, saveEarlier, takeEarlier, toEntries } from "./earlier.ts";
 import { RunJournal } from "./journal.ts";
 
@@ -164,6 +164,33 @@ export class Gateway {
     await this.dispatcher.stopRun(run);
     await this.journal.finish(run);
     return true;
+  }
+
+  /**
+   * The person's approvals still waiting, in the page's layout, optionally for one run. Cards
+   * asked here come with everything; those another process asked come from the database, with
+   * the run, bot and preview its journal kept, so any process can list and answer them.
+   */
+  async approvals(actor: number, run?: string): Promise<Record<string, unknown>[]> {
+    const here = this.dispatcher.approvals(actor);
+    const rest = (await this.store.openApprovals(actor)).filter(
+      (open) => !this.dispatcher.holds(open.id),
+    );
+    const asked = await this.journal.requested(rest.map((open) => open.id));
+    const views = here.map(approvalView);
+    for (const open of rest) {
+      const shown = asked.get(open.id);
+      views.push({
+        id: open.id,
+        run: shown?.run ?? null,
+        bot: typeof shown?.data.bot === "string" ? shown.data.bot : null,
+        tool: open.tool,
+        preview: typeof shown?.data.preview === "string" ? shown.data.preview : "",
+        digest: open.digest,
+        expires: open.expires,
+      });
+    }
+    return run === undefined ? views : views.filter((view) => view.run === run);
   }
 
   /** Refuses, with a 409, a run that has no model to run on yet. */

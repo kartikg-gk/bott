@@ -123,13 +123,25 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const sessions = new SessionManager(config, store, () => provider);
     managers.push(sessions);
     const sink = new MemorySink();
-    const dispatcher = new Dispatcher(store, sessions, sink, { workers: opts.workers });
+    const dispatcher = new Dispatcher(store, sessions, sink, {
+      workers: opts.workers,
+      watchMs: 20,
+    });
     const status = async (id: bigint) =>
       String(
         (await db.query("SELECT status FROM inbox WHERE instance='main' AND id=?", [id]))[0]
           ?.status,
       );
-    return { db, store, sessions, sink, dispatcher, status };
+    return { db, store, sessions, sink, dispatcher, status, config };
+  }
+
+  /** Another process on the same database, with sessions and a dispatcher of its own. */
+  async function elsewhere(db: Database, config: RuntimeConfig) {
+    const store = await Store.open(db, "main");
+    const sessions = new SessionManager(config, store, () => gated([]));
+    managers.push(sessions);
+    const dispatcher = new Dispatcher(store, sessions, new MemorySink(), { watchMs: 20 });
+    return { store, dispatcher };
   }
 
   it("a pending message runs and its answer is delivered", async () => {
@@ -389,6 +401,73 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(decided).toMatchObject({ decision: "allowed", source: "user" });
     expect(dispatcher.approvals(7)).toEqual([]);
   });
+
+  it("an approval answered in another process reaches the run waiting here", async () => {
+    const provider = gated([
+      toolCall("Write", { path: "note.txt", content: "kept" }),
+      reply("done"),
+    ]);
+    const { db, store, sessions, sink, dispatcher, status, config } = await setup(provider, {
+      policy: "ask",
+    });
+    const other = await elsewhere(db, config);
+    const item = await store.admitWeb(WEB_CHAT, 7, "write a note");
+    const chief = (await store.bot((await store.chief()).id)) as Bot;
+    const file = join(sessions.workspaceFor(chief).root, "note.txt");
+
+    expect(await dispatcher.tick()).toBe(1);
+    const card = await sink.nextCard();
+    expect(await other.dispatcher.decide(card.id, true, 8)).toBe(false);
+    expect(await other.dispatcher.decide("no-such-card", true, 7)).toBe(false);
+    expect(await other.dispatcher.decide(card.id, true, 7)).toBe(true);
+    expect(await other.dispatcher.decide(card.id, false, 7)).toBe(false);
+    await dispatcher.idle();
+
+    expect(readFileSync(file, "utf8")).toBe("kept");
+    expect(sink.texts()).toEqual(["done"]);
+    expect(await status(item.id)).toBe("completed");
+    const decided = (
+      await db.query("SELECT decision,source FROM approvals WHERE id=?", [card.id])
+    )[0];
+    expect(decided).toMatchObject({ decision: "allowed", source: "user" });
+    expect(dispatcher.approvals(7)).toEqual([]);
+  });
+
+  it("an approval refused in another process is refused here", async () => {
+    const provider = gated([
+      toolCall("Write", { path: "note.txt", content: "kept" }),
+      reply("left it"),
+    ]);
+    const { db, store, sessions, sink, dispatcher, config } = await setup(provider, {
+      policy: "ask",
+    });
+    const other = await elsewhere(db, config);
+    await store.admitWeb(WEB_CHAT, 7, "write a note");
+    const chief = (await store.bot((await store.chief()).id)) as Bot;
+
+    expect(await dispatcher.tick()).toBe(1);
+    const card = await sink.nextCard();
+    expect(await other.dispatcher.decide(card.id, false, 7)).toBe(true);
+    await dispatcher.idle();
+    expect(existsSync(join(sessions.workspaceFor(chief).root, "note.txt"))).toBe(false);
+    expect(sink.texts()).toEqual(["left it"]);
+  });
+
+  it.each(["cancelling", "cancelled"])(
+    "a run another process marked %s stops here",
+    async (marked) => {
+      const gate = new Gate();
+      const { db, store, sink, dispatcher } = await setup(gated([reply("never")], { 0: gate }));
+      const item = await store.admitWeb(WEB_CHAT, 7, "long job", { run: "run-9" });
+
+      expect(await dispatcher.tick()).toBe(1);
+      await gate.reached;
+      await db.run("UPDATE inbox SET status=? WHERE instance='main' AND id=?", [marked, item.id]);
+      await dispatcher.idle();
+      expect(dispatcher.running()).toBe(0);
+      expect(sink.texts()).toEqual([]);
+    },
+  );
 
   it("a delegated run's approval appears on the chief's route and the decision reaches it", async () => {
     const provider = gated([

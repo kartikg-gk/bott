@@ -262,27 +262,96 @@ export async function addApproval(ctx: StoreContext, a: Approval): Promise<void>
 
 /**
  * Decides an approval that is still open and unexpired. A late or repeated decision changes
- * nothing, and the result says why.
+ * nothing, and the result says why. With `user`, only that person's approval is decided; anyone
+ * else's counts as missing.
  */
 export async function decide(
   ctx: StoreContext,
   id: string,
   allow: boolean,
   source: string,
+  user?: number,
 ): Promise<Decision> {
   const { db, instance } = ctx;
   const now = ctx.clock();
+  const asked = user === undefined ? "" : " AND user=?";
+  const whose = user === undefined ? [] : [user];
   const changed = await db.run(
     "UPDATE approvals SET decision=?,source=?,version=version+1 WHERE instance=? AND id=? " +
-      "AND decision IS NULL AND expires>?",
-    [allow ? "allowed" : "denied", source, instance, id, now],
+      `AND decision IS NULL AND expires>?${asked}`,
+    [allow ? "allowed" : "denied", source, instance, id, now, ...whose],
   );
   if (changed > 0) return "decided";
   const row = (
-    await db.query("SELECT decision FROM approvals WHERE instance=? AND id=?", [instance, id])
+    await db.query(`SELECT decision FROM approvals WHERE instance=? AND id=?${asked}`, [
+      instance,
+      id,
+      ...whose,
+    ])
   )[0];
   if (!row) return "missing";
   return row.decision === null || row.decision === undefined ? "expired" : "already";
+}
+
+/** The approvals among `ids` that have been decided, each mapped to whether it was allowed. */
+export async function decisions(ctx: StoreContext, ids: string[]): Promise<Map<string, boolean>> {
+  const found = new Map<string, boolean>();
+  if (ids.length === 0) return found;
+  const rows = await ctx.db.query(
+    `SELECT id,decision FROM approvals WHERE instance=? AND id IN (${ids.map(() => "?").join(",")}) ` +
+      "AND decision IS NOT NULL",
+    [ctx.instance, ...ids],
+  );
+  for (const row of rows) found.set(String(row.id), row.decision === "allowed");
+  return found;
+}
+
+/** An approval still waiting for a decision, as the database holds it. */
+export interface OpenApproval {
+  id: string;
+  chat: number;
+  thread: number;
+  tool: string;
+  digest: string;
+  /** Seconds since the epoch. */
+  expires: number;
+}
+
+/**
+ * The person's approvals that are undecided and unexpired, oldest first. Only those whose
+ * conversation still has a message or a background task going are listed: an approval left by
+ * a process that stopped has nobody waiting for its answer.
+ */
+export async function openApprovals(ctx: StoreContext, user: number): Promise<OpenApproval[]> {
+  const rows = await ctx.db.query(
+    "SELECT id,chat,thread,tool,digest,expires FROM approvals a WHERE instance=? AND user=? " +
+      "AND decision IS NULL AND expires>? AND (EXISTS (SELECT 1 FROM inbox i " +
+      "WHERE i.instance=a.instance AND i.chat=a.chat AND i.user=a.user AND i.thread=a.thread " +
+      "AND i.status IN ('dispatching','running')) OR EXISTS (SELECT 1 FROM tasks t " +
+      "WHERE t.instance=a.instance AND t.chat=a.chat AND t.actor=a.user AND t.thread=a.thread " +
+      "AND t.status='running')) ORDER BY created,id",
+    [ctx.instance, user, ctx.clock()],
+  );
+  return rows.map((row) => ({
+    id: String(row.id),
+    chat: Number(row.chat),
+    thread: Number(row.thread),
+    tool: String(row.tool),
+    digest: String(row.digest),
+    expires: Number(row.expires),
+  }));
+}
+
+/** The current status of each of these inbox items that still exists. */
+export async function statuses(ctx: StoreContext, ids: bigint[]): Promise<Map<bigint, string>> {
+  const found = new Map<bigint, string>();
+  if (ids.length === 0) return found;
+  const rows = await ctx.db.query(
+    `SELECT CAST(id AS TEXT) AS id,status FROM inbox WHERE instance=? AND id IN (${ids.map(() => "?").join(",")})`,
+    [ctx.instance, ...ids],
+  );
+  for (const row of rows) found.set(BigInt(String(row.id)), String(row.status));
+  return found;
 }
 
 /**

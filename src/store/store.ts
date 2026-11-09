@@ -201,8 +201,23 @@ export class Store {
     return inbox.addApproval(this.ctx, a);
   }
 
-  decide(id: string, allow: boolean, source: string) {
-    return inbox.decide(this.ctx, id, allow, source);
+  decide(id: string, allow: boolean, source: string, user?: number) {
+    return inbox.decide(this.ctx, id, allow, source, user);
+  }
+
+  /** Which of these approvals were decided, wherever that happened, and whether allowed. */
+  approvalDecisions(ids: string[]) {
+    return inbox.decisions(this.ctx, ids);
+  }
+
+  /** The person's approvals still waiting, whichever process asked for them. */
+  openApprovals(user: number) {
+    return inbox.openApprovals(this.ctx, user);
+  }
+
+  /** Each item's current status, as another process may have changed it. */
+  inboxStatuses(ids: bigint[]) {
+    return inbox.statuses(this.ctx, ids);
   }
 
   addReport(taskId: number, text: string) {

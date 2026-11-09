@@ -295,6 +295,28 @@ export class RunJournal {
     }));
   }
 
+  /**
+   * The approval requests these runs' journals hold, by approval id: the run each belongs to and
+   * what was shown for it. Approvals asked outside a page's run have none.
+   */
+  async requested(
+    ids: string[],
+  ): Promise<Map<string, { run: string; data: Record<string, unknown> }>> {
+    const found = new Map<string, { run: string; data: Record<string, unknown> }>();
+    if (ids.length === 0) return found;
+    await this.ready();
+    const rows = await this.db.query(
+      "SELECT run,data FROM web_run_events WHERE instance=? AND kind='approval_requested' " +
+        `AND json_extract(data,'$.id') IN (${ids.map(() => "?").join(",")})`,
+      [this.instance, ...ids],
+    );
+    for (const row of rows) {
+      const data = JSON.parse(String(row.data)) as Record<string, unknown>;
+      found.set(String(data.id), { run: String(row.run), data });
+    }
+    return found;
+  }
+
   /** The tool calls the run made, as far as they are still kept. */
   async activity(run: string): Promise<Record<string, unknown>[]> {
     const events = await this.events(run, 0);

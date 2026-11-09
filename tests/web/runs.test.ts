@@ -138,6 +138,56 @@ describe.each(backends)("%s backend", (kind) => {
     expect(activity).toMatchObject([{ type: "tool_started", tool: "Write" }, { failed: true }]);
   });
 
+  it("lets a request reaching another process see, answer and stop a run's approvals", async () => {
+    h = new Harness(kind);
+    const db = h.database();
+    const gate = new Gate();
+    const running = await h.gateway(
+      gated([toolCall("Write", { path: "a.txt", content: "x" }), reply("ok"), reply("never")], {
+        2: gate,
+      }),
+      { db, policy: "ask" },
+    );
+    const other = h.app(await h.gateway(gated([]), { db, policy: "ask" })).call;
+    const { call } = h.app(running);
+    const start = async (text: string) =>
+      (
+        (await (await call("/api/runs", { method: "POST", json: { text } })).json()) as {
+          id: string;
+        }
+      ).id;
+
+    const id = await start("w");
+    let cards: Record<string, unknown>[] = [];
+    while (cards.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      cards = (await (await other(`/api/approvals?run=${id}`)).json()) as Record<string, unknown>[];
+    }
+    const [card] = cards;
+    const here = (await (await call(`/api/approvals?run=${id}`)).json()) as unknown[];
+    expect(card).toEqual(here[0]);
+    expect(card).toMatchObject({ run: id, tool: "Write", expires: expect.any(Number) });
+    expect(String(card?.preview)).toContain("a.txt");
+    expect(await (await other("/api/approvals?run=elsewhere")).status).toBe(404);
+    const answered = await other("/api/approvals", {
+      method: "POST",
+      json: { id: card?.id, allow: true },
+    });
+    expect(await answered.json()).toEqual({ decided: true });
+    expect(await (await other("/api/approvals")).json()).toEqual([]);
+    await running.dispatcher.idle();
+    expect(await (await call(`/api/runs/${id}`)).json()).toMatchObject({ answer: "ok" });
+    const activity = (await (await call(`/api/runs/${id}/activity`)).json()) as unknown[];
+    expect(activity).toMatchObject([{ tool: "Write" }, { failed: false }]);
+
+    const long = await start("wait");
+    await gate.reached;
+    const stopped = await other(`/api/runs/${long}/stop`, { method: "POST" });
+    expect(await stopped.json()).toMatchObject({ status: "cancelled" });
+    await running.dispatcher.idle();
+    expect(running.dispatcher.running()).toBe(0);
+  });
+
   it("keeps one person's runs from another", async () => {
     h = new Harness(kind);
     const db = h.database();
