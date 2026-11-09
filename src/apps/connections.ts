@@ -5,6 +5,7 @@ import type { AttemptLimit, CredentialStore, FlowStore } from "./credentials.ts"
 import { MemoryAttempts } from "./credentials.ts";
 import { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GOOGLE_TOKEN_URL } from "./gmail.ts";
 import { AppError, basic, type Fetch, HttpError } from "./http.ts";
+import { NOTION_VERSION } from "./notion.ts";
 import { AppRunner } from "./registry.ts";
 
 /** A refusal the web layer turns into an HTTP status with this message. */
@@ -69,7 +70,24 @@ export const OAUTH_APPS: Record<string, OAuthApp> = {
   ]),
   drive: google("drive", ["https://www.googleapis.com/auth/drive.readonly"]),
   contacts: google("contacts", ["https://www.googleapis.com/auth/contacts.readonly"]),
+  notion: {
+    authUrl: "https://api.notion.com/v1/oauth/authorize",
+    tokenUrl: "https://api.notion.com/v1/oauth/token",
+    clientId: "BOTT_NOTION_CLIENT_ID",
+    secret: "BOTT_NOTION_CLIENT_SECRET",
+    scopes: [],
+  },
+  linear: {
+    authUrl: "https://linear.app/oauth/authorize",
+    tokenUrl: "https://api.linear.app/oauth/token",
+    clientId: "BOTT_LINEAR_CLIENT_ID",
+    secret: "BOTT_LINEAR_CLIENT_SECRET",
+    scopes: ["read", "issues:create", "comments:create"],
+  },
 };
+
+/** Fields some token endpoints need on every exchange. */
+const EXTRA_TOKEN_FIELDS: Record<string, Record<string, string>> = {};
 
 /** A saved app token, as it is stored: seconds since the epoch for `expires`. */
 export interface SavedToken {
@@ -182,12 +200,37 @@ export class AppConnections {
   }
 
   /** Calls the app's token endpoint and reads its reply, recognising an expired grant. */
-  async exchange(name: string, data: Record<string, string>): Promise<Record<string, unknown>> {
+  async exchange(
+    name: string,
+    data: Record<string, string>,
+    client: Record<string, string> = this.clientFields(name),
+  ): Promise<Record<string, unknown>> {
     const app = OAUTH_APPS[name] as OAuthApp;
+    let init: RequestInit;
+    if (name === "notion") {
+      // Notion takes JSON with the client in Basic auth, and does not use PKCE.
+      const { code_verifier: _verifier, ...rest } = data;
+      init = {
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "Notion-Version": NOTION_VERSION,
+          authorization: basic(String(client.client_id), String(client.client_secret)),
+        },
+        body: JSON.stringify(rest),
+      };
+    } else {
+      init = {
+        headers: {
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ ...client, ...data, ...EXTRA_TOKEN_FIELDS[name] }).toString(),
+      };
+    }
     const reply = await this.fetch(app.tokenUrl, {
+      ...init,
       method: "POST",
-      headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ ...this.clientFields(name), ...data }).toString(),
       signal: AbortSignal.timeout(15000),
     });
     const text = await reply.text();
@@ -229,6 +272,9 @@ export class AppConnections {
       const granted = new Set(
         typeof result.scope === "string" ? result.scope.trim().split(/[,\s]+/) : [],
       );
+      if (name === "linear" && Array.isArray(result.scope)) {
+        for (const scope of result.scope) if (typeof scope === "string") granted.add(scope);
+      }
       const older =
         name === "gmail" &&
         previous !== undefined &&
@@ -241,7 +287,7 @@ export class AppConnections {
         );
       }
     }
-    if (required.length && refresh === null) {
+    if ((required.length || name === "notion") && refresh === null) {
       throw new AppError(`${name} did not provide offline authorization. Reconnect.`);
     }
     let expiry = result.expires_in;
@@ -372,15 +418,18 @@ export class AppConnections {
       redirect_uri: callback,
       response_type: "code",
       state,
-      code_challenge_method: "S256",
-      code_challenge: challenge(verifier),
     };
+    if (name === "notion") query.owner = "user";
+    else
+      Object.assign(query, { code_challenge_method: "S256", code_challenge: challenge(verifier) });
     if (app.tokenUrl === GOOGLE_TOKEN_URL) {
       Object.assign(query, {
         scope: [...app.scopes].sort().join(" "),
         access_type: "offline",
         prompt: "consent",
       });
+    } else if (name === "linear") {
+      Object.assign(query, { scope: [...app.scopes].sort().join(","), actor: "user" });
     }
     return { url: `${app.authUrl}?${new URLSearchParams(query)}` };
   }
@@ -426,7 +475,29 @@ export class AppConnections {
     if (!this.configured(name)) return false;
     const app = OAUTH_APPS[name] as OAuthApp;
     let reply: Response;
-    if (app.tokenUrl === GOOGLE_TOKEN_URL) {
+    const form = (fields: Record<string, string>) => ({
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(fields).toString(),
+    });
+    if (name === "notion") {
+      const fields = this.clientFields(name);
+      reply = await this.fetch("https://api.notion.com/v1/oauth/revoke", {
+        method: "POST",
+        headers: {
+          authorization: basic(fields.client_id, fields.client_secret),
+          "content-type": "application/json",
+          "Notion-Version": NOTION_VERSION,
+        },
+        body: JSON.stringify({ token: token.access }),
+      });
+    } else if (name === "linear") {
+      const kind = token.refresh ? "refresh" : "access";
+      reply = await this.fetch(
+        "https://api.linear.app/oauth/revoke",
+        form({ token: String(token[kind]), token_type_hint: `${kind}_token` }),
+      );
+    } else if (app.tokenUrl === GOOGLE_TOKEN_URL) {
       reply = await this.fetch("https://oauth2.googleapis.com/revoke", {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
