@@ -13,6 +13,7 @@ import { anthropicProvider } from "./agent/providers/anthropic.ts";
 import { openAICompatibleProvider } from "./agent/providers/openai.ts";
 import { withRetry } from "./agent/providers/retry.ts";
 import type { FetchFn, ModelProvider, StreamEvent } from "./agent/providers/types.ts";
+import { ComposioAccounts } from "./apps/composio.ts";
 import { AppConnections } from "./apps/connections.ts";
 import { BrowserKeys } from "./browser/keys.ts";
 import { BrowserRegistry } from "./browser/registry.ts";
@@ -179,7 +180,15 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       env,
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
-    const apps = connectedApps(connections);
+    const composio = new ComposioAccounts({
+      credentials: accountAppStores(store).credentials,
+      attempts: accountAppStores(store).attempts,
+      storeFor: connections.opts.storeFor,
+      origin,
+      env,
+      ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    });
+    const apps = connectedApps(connections, composio);
     const browser = new BrowserKeys(store, opts.fetch ? { fetch: opts.fetch as typeof fetch } : {});
     const browsers = new BrowserRegistry();
     const built = new AccountGateways({

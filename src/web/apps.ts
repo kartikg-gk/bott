@@ -13,6 +13,7 @@
 import { HttpError } from "../accounts/http.ts";
 import type { Account, AccountStore } from "../accounts/store.ts";
 import { BotApps } from "../apps/access.ts";
+import type { ComposioAccounts } from "../apps/composio.ts";
 import { type AppConnections, type Caller, ConnectionError } from "../apps/connections.ts";
 import type { ApiRouter, Ctx } from "./context.ts";
 import type { Gateway } from "./gateway.ts";
@@ -105,15 +106,17 @@ async function answer<T>(work: () => Promise<T>): Promise<T> {
 }
 
 /** The seam for signed-in accounts, backed by their app connections. */
-export function connectedApps(connections: AppConnections): AppsSeam {
+export function connectedApps(connections: AppConnections, composio?: ComposioAccounts): AppsSeam {
   return {
     attach(gateway, account) {
-      if (account)
-        gateway.sessions.apps = new BotApps(gateway.store, connections.runner(account.id));
+      if (!account) return;
+      const extra = composio?.configured ? composio.forAccount(account.id) : undefined;
+      gateway.sessions.apps = new BotApps(gateway.store, connections.runner(account.id), extra);
     },
     routes(router) {
       const call = <T>(ctx: Ctx, work: (who: Caller) => Promise<T>) =>
         answer(async () => fresh(await work(caller(ctx))));
+      if (composio) composioRoutes(router, composio, call);
       router
         .add("GET", "/api/apps", (ctx) => call(ctx, (who) => connections.list(who)))
         .add("GET", "/api/apps/bland/calls/:call", (ctx, request, params) =>
@@ -155,4 +158,36 @@ export function connectedApps(connections: AppConnections): AppsSeam {
       return new Response(null, { status: 303, headers: { Location: target } });
     },
   };
+}
+
+/**
+ * Composio toolkits, kept apart from the built-in apps:
+ * - GET    /api/apps/composio                          every toolkit and its bots
+ * - POST   /api/apps/composio/:toolkit/connect         starts hosted sign-in
+ * - GET    /api/apps/composio/:toolkit/status          asks Composio how it stands
+ * - DELETE /api/apps/composio/:toolkit                 forgets it
+ * - PUT    /api/apps/composio/:toolkit/bots/:bot       {enabled} grants or stops one bot
+ */
+function composioRoutes(
+  router: ApiRouter,
+  composio: ComposioAccounts,
+  call: <T>(ctx: Ctx, work: (who: Caller) => Promise<T>) => Promise<Response>,
+): void {
+  router
+    .add("GET", "/api/apps/composio", (ctx) => call(ctx, (who) => composio.list(who)))
+    .add("POST", "/api/apps/composio/:toolkit/connect", (ctx, _r, params) =>
+      call(ctx, (who) => composio.connect(who, params.toolkit as string)),
+    )
+    .add("GET", "/api/apps/composio/:toolkit/status", (ctx, _r, params) =>
+      call(ctx, (who) => composio.status(who, params.toolkit as string)),
+    )
+    .add("DELETE", "/api/apps/composio/:toolkit", (ctx, _r, params) =>
+      call(ctx, (who) => composio.disconnect(who, params.toolkit as string)),
+    )
+    .add("PUT", "/api/apps/composio/:toolkit/bots/:bot", async (ctx, request, params) => {
+      const body = await readJson(request);
+      return call(ctx, (who) =>
+        composio.grant(who, params.toolkit as string, params.bot as string, body),
+      );
+    });
 }

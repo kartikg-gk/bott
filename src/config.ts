@@ -172,6 +172,7 @@ export const SETTINGS: Setting[] = [
     about: "Gmail refresh token for the gmail app without OAuth",
   },
   { name: "BOTT_TELEGRAM_APP_TOKEN", about: "Telegram bot that sends messages for bots" },
+  { name: "BOTT_COMPOSIO_API_KEY", about: "Composio project key; offers Slack, Jira and more" },
   { name: "BOTT_TAVILY_API_KEY", about: "Tavily key for web search" },
   { name: "BOTT_EXA_API_KEY", about: "Exa key for web search" },
   { name: "BOTT_SCRAPERAPI_API_KEY", about: "ScraperAPI key for reading pages" },

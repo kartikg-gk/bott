@@ -40,6 +40,8 @@ export interface Io {
   probe?: Probe;
   /** The database `doctor` checks, in place of the configured one. */
   database?: DoctorIo["database"];
+  /** How `doctor` reaches outside services; tests stand a fake in. */
+  fetch?: DoctorIo["fetch"];
 }
 
 const USAGE = [

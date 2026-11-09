@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { Fetch } from "../src/apps/http.ts";
 import { main } from "../src/cli.ts";
 import { ensureSchema } from "../src/db/schema.ts";
 import { SCHEMA_MARK } from "../src/db/status.ts";
@@ -9,6 +10,7 @@ import type { Probe, ProbeResult } from "../src/doctor.ts";
 import { readSettings } from "../src/doctor.ts";
 import { KEY } from "./support/accounts.ts";
 import { database } from "./support/fakeD1.ts";
+import { fakeFetch, json, offline, status } from "./support/fakeFetch.ts";
 
 const TOKEN = "a-token-long-enough-for-tests";
 const INSTANCE = "ab".repeat(16);
@@ -38,7 +40,11 @@ function programs(answers: Record<string, ProbeResult> = {}): Probe {
 }
 
 /** Runs the doctor against a schema-ready fake D1, so nothing leaves the test. */
-async function check(env: Record<string, string>, probe: Probe = programs()) {
+async function check(
+  env: Record<string, string>,
+  probe: Probe = programs(),
+  fetcher: Fetch = offline,
+) {
   const lines: string[] = [];
   const opened = database("d1");
   await ensureSchema(opened.db);
@@ -50,6 +56,7 @@ async function check(env: Record<string, string>, probe: Probe = programs()) {
     out: (line) => lines.push(line),
     probe,
     database: () => opened.db,
+    fetch: fetcher,
   });
   const fixes = lines.filter((line) => line.startsWith("fix "));
   const notes = lines.filter((line) => line.startsWith("note "));
@@ -78,6 +85,25 @@ const googleReady = () => ({
 });
 
 describe("bott doctor", () => {
+  it("says whether the Composio key is set and accepted", async () => {
+    const composio = (code: number) =>
+      fakeFetch({
+        "GET https://backend.composio.dev/api/v3.1/auth_configs": () =>
+          code === 200 ? json({ items: [] }) : status(code),
+      });
+    const unset = await check(tokenReady());
+    expect(unset.notes).toContainEqual(expect.stringMatching(/BOTT_COMPOSIO_API_KEY is not set/));
+    const env = { ...tokenReady(), BOTT_COMPOSIO_API_KEY: "ck_1" };
+    const good = composio(200);
+    const accepted = await check(env, programs(), good);
+    expect(accepted.text).toContain("ok    BOTT_COMPOSIO_API_KEY is set and Composio accepts it");
+    expect(good.seen[0]?.headers.get("x-api-key")).toBe("ck_1");
+    const refused = await check(env, programs(), composio(401));
+    expect(refused.fixes).toContainEqual(expect.stringMatching(/Composio refuses/));
+    const silent = await check(env);
+    expect(silent.notes).toContainEqual(expect.stringMatching(/could not be asked/));
+  });
+
   it("passes a complete setup, with a line for each part", async () => {
     const run = await check(tokenReady());
     expect(run.fixes).toEqual([]);

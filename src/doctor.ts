@@ -12,6 +12,8 @@ import { existsSync } from "node:fs";
 import { CLIENT_ID_VARIABLE, CLIENT_SECRET_VARIABLE, checkGoogleBind } from "./accounts/google.ts";
 import { TOKEN_VARIABLE } from "./accounts/localToken.ts";
 import { MASTER_KEY_VARIABLE, masterKey } from "./accounts/sealing.ts";
+import { COMPOSIO_KEY, ComposioClient } from "./apps/composio.ts";
+import { type Fetch, HttpError } from "./apps/http.ts";
 import {
   type Config,
   ConfigError,
@@ -40,6 +42,8 @@ export interface DoctorIo {
   probe?: Probe;
   /** Opens the configured database; tests stand one in instead of reaching D1. */
   database?: (config: Config, env: Env) => Database;
+  /** How the doctor asks outside services whether a key works; tests stand a fake in. */
+  fetch?: Fetch;
 }
 
 const runProgram: Probe = (command, args) => {
@@ -214,6 +218,22 @@ export async function doctor(io: DoctorIo): Promise<number> {
     else if (set(secret)) fix(`Set ${name} to go with ${secret}`);
   }
   if (paired.length > 0) ok(`App clients for ${paired.join(", ")}`);
+
+  // Composio is optional; when its key is set, ask Composio whether it takes it.
+  if (set(COMPOSIO_KEY)) {
+    try {
+      await new ComposioClient(io.fetch ?? fetch, String(env[COMPOSIO_KEY]).trim()).check();
+      ok(`${COMPOSIO_KEY} is set and Composio accepts it`);
+    } catch (error) {
+      if (error instanceof HttpError && [401, 403].includes(error.status)) {
+        fix(`Composio refuses ${COMPOSIO_KEY}; make a new project key`);
+      } else {
+        note(`${COMPOSIO_KEY} is set, but Composio could not be asked about it`);
+      }
+    }
+  } else {
+    note(`${COMPOSIO_KEY} is not set; Slack, Jira and the other Composio apps are not offered`);
+  }
 
   // Where bots run commands.
   const computer = config.computer;
