@@ -329,13 +329,17 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       sessions.prompt = async () => {
-        throw new SetupError("No model key is saved for this account yet; add one under Account settings");
+        throw new SetupError(
+          "No model key is saved for this account yet; add one under Account settings",
+        );
       };
       const fixable = await store.admitWeb(WEB_CHAT, 9, "hi");
       await dispatcher.tick();
       await dispatcher.idle();
       expect(await status(fixable.id)).toBe("failed");
-      expect(sink.texts().at(-1)).toBe("No model key is saved for this account yet; add one under Account settings");
+      expect(sink.texts().at(-1)).toBe(
+        "No model key is saved for this account yet; add one under Account settings",
+      );
 
       sessions.prompt = async () => {
         throw new Error("SQLITE_BUSY at C:/state/gateway.sqlite3");

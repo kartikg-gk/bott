@@ -171,7 +171,8 @@ export async function resolveAccountModel(
     }
     throw error;
   }
-  if (key === null) throw new Error("No model key is saved for this account yet; add one under Account settings");
+  if (key === null)
+    throw new Error("No model key is saved for this account yet; add one under Account settings");
   const base = (PROVIDERS[name] as { base: string }).base;
   const raw =
     name === "anthropic"
