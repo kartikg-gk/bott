@@ -37,6 +37,8 @@ function fakeGoogle() {
   const grants = new Map<string, { claims: Record<string, unknown>; challenge: string }>();
   const calls: string[] = [];
   let header: Record<string, unknown> = { alg: "RS256", kid: "fixture-key", typ: "JWT" };
+  /** Changes the issued token after signing, to stand in for a forged one. */
+  let forge: (token: string) => string = (token) => token;
   const fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const request = new Request(input, init);
     calls.push(request.url);
@@ -56,7 +58,7 @@ function fakeGoogle() {
       .update(String(fields.get("code_verifier")))
       .digest("base64url");
     expect(challenge).toBe(grant.challenge);
-    return Response.json({ id_token: signJwt(grant.claims, privateKey, header) });
+    return Response.json({ id_token: forge(signJwt(grant.claims, privateKey, header)) });
   };
   return {
     fetch,
@@ -64,6 +66,9 @@ function fakeGoogle() {
     calls,
     setHeader: (value: Record<string, unknown>) => {
       header = value;
+    },
+    setForge: (value: (token: string) => string) => {
+      forge = value;
     },
   };
 }
@@ -339,6 +344,41 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     }
   });
 
+  it("refuses a token signed by another key under a known key ID", async () => {
+    const made = await fresh();
+    const other = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
+    made.google.setForge((token) => {
+      const [head, body] = token.split(".");
+      const signature = sign("sha256", Buffer.from(`${head}.${body}`), other);
+      return `${head}.${body}.${b64(signature)}`;
+    });
+    const browser = new Browser();
+    const callback = await begin(made, browser, "alice", "alice@example.test");
+    expect(await status(made.login.callback(browser.request(callback)))).toBe(401);
+    expect(browser.cookies.has(SESSION_COOKIE)).toBe(false);
+  });
+
+  it("refuses a token edited after it was signed", async () => {
+    const made = await fresh();
+    made.google.setForge((token) => {
+      const [head, body, signature] = token.split(".");
+      const claims = JSON.parse(Buffer.from(String(body), "base64url").toString());
+      const edited = b64(JSON.stringify({ ...claims, email: "bob@team.test", hd: "team.test" }));
+      return `${head}.${edited}.${signature}`;
+    });
+    const browser = new Browser();
+    const callback = await begin(made, browser, "alice", "alice@example.test");
+    expect(await status(made.login.callback(browser.request(callback)))).toBe(401);
+    expect(browser.cookies.has(SESSION_COOKIE)).toBe(false);
+  });
+
+  it("refuses a token that is not valid yet", async () => {
+    const made = await fresh();
+    const browser = new Browser();
+    const callback = await begin(made, browser, "alice", "alice@example.test", { nbf: NOW + 60 });
+    expect(await status(made.login.callback(browser.request(callback)))).toBe(401);
+  });
+
   it("refuses a declined or unknown code", async () => {
     const made = await fresh();
     const browser = new Browser();
@@ -398,7 +438,25 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(login.requestAllowed(proxied, { trustedProxy: true })).toBe(true);
   });
 
-  it("marks cookies secure on an HTTPS origin and refuses a busy sign-in", async () => {
+  it("refuses a new sign-in while too many are pending", async () => {
+    const { store, login } = await fresh();
+    for (let i = 0; i < 1024; i++) {
+      await store.db.run("INSERT INTO flows VALUES(?,?,?,?,?)", [
+        new Uint8Array([i >> 8, i & 255, 1]),
+        new Uint8Array([i >> 8, i & 255, 2]),
+        "v",
+        "n",
+        NOW + 600,
+      ]);
+    }
+    const refused = await login
+      .start(new Browser().request("/auth/login"))
+      .catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(HttpError);
+    expect(refused).toMatchObject({ status: 429, message: "Sign-in is handling other requests; retry in a moment." });
+  });
+
+  it("marks cookies secure on an HTTPS origin", async () => {
     const { store } = await fresh();
     const login = new GoogleLogin(store, {
       origin: "https://gateway.example.test",

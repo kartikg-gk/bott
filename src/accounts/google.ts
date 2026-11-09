@@ -231,6 +231,7 @@ export class GoogleLogin {
       throw new Error("The Google token header is not valid");
     }
     const key = createPublicKey({ key: await this.signingKey(kid), format: "jwk" });
+    if (key.asymmetricKeyType !== "rsa") throw new Error("Google signing key is not RSA");
     const signed = Buffer.from(`${head}.${body}`);
     if (!verify("sha256", signed, key, Buffer.from(signature, "base64url"))) {
       throw new Error("Invalid Google token signature");
