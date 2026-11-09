@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { App } from "./app.ts";
 import { AppError, bearer, jsonOutput } from "./http.ts";
-import { findTool, type RemoteTool, resultData, runRemote } from "./mcp.ts";
+import { HostedServer, type HostedSession, type RemoteTool } from "./mcp.ts";
 import { text, tool } from "./schema.ts";
 
 export const TODOIST_MCP_URL = "https://ai.todoist.net/mcp";
@@ -39,66 +39,70 @@ const call = { name: text, arguments: z.record(z.string(), z.unknown()) };
 const tools = [
   tool(
     "todoist_list_tools",
-    "Show the Todoist tools and whether each reads or writes; give a tool name for its input schema.",
+    "Todoist's own tools, each marked read or write. Name one to get its input schema.",
     { cursor: text, name: text },
     { optional: "all" },
   ),
-  tool("todoist_read_tool", "Use a Todoist tool that todoist_list_tools shows as read.", call, {
+  tool("todoist_read_tool", "Runs a Todoist tool that todoist_list_tools marks as read.", call, {
     optional: ["arguments"],
   }),
   tool(
     "todoist_write_tool",
-    "Use a Todoist tool that todoist_list_tools shows as write; each use needs approval.",
+    "Runs a Todoist tool that todoist_list_tools marks as write. The person approves each call.",
     call,
     { optional: ["arguments"], write: true, review: true },
   ),
 ];
 
+/** A tool counts as a read only when it is on the documented list and says so itself. */
 export function accessMode(spec: RemoteTool): "read" | "write" {
-  const hints = spec.annotations;
-  const read =
-    READS.has(spec.name) &&
-    !!hints &&
-    hints.readOnlyHint === true &&
-    hints.destructiveHint !== true;
-  return read ? "read" : "write";
+  const { readOnlyHint, destructiveHint } = spec.annotations ?? {};
+  const claimsRead = readOnlyHint === true && destructiveHint !== true;
+  return claimsRead && READS.has(spec.name) ? "read" : "write";
 }
 
-const summary = (spec: RemoteTool) => ({
+const server = new HostedServer("Todoist", TODOIST_MCP_URL);
+
+const describe = (spec: RemoteTool) => ({
   name: spec.name,
   mode: accessMode(spec),
   description: (spec.description ?? "").slice(0, 240),
 });
+
+type Args = Record<string, unknown>;
+
+/** Runs a named Todoist tool through the matching read or write entry point only. */
+const through =
+  (mode: "read" | "write") =>
+  async (session: HostedSession, a: Args): Promise<unknown> => {
+    const spec = await session.lookup(String(a.name));
+    const needed = accessMode(spec);
+    if (needed !== mode) throw new AppError(`That tool is a ${needed}; call it with todoist_${needed}_tool`);
+    return session.invoke(spec, (a.arguments ?? {}) as Args);
+  };
+
+const HANDLERS: Record<string, (session: HostedSession, a: Args) => Promise<unknown>> = {
+  async todoist_list_tools(session, a) {
+    if (a.name) {
+      const spec = await session.lookup(String(a.name));
+      return { ...describe(spec), inputSchema: spec.inputSchema ?? null };
+    }
+    const page = await session.catalog(a.cursor as string | undefined);
+    return { tools: page.tools.map(describe), nextCursor: page.nextCursor };
+  },
+  todoist_read_tool: through("read"),
+  todoist_write_tool: through("write"),
+};
 
 export const todoist: App = {
   name: "todoist",
   tools,
   configured: () => false,
   async run(ctx, name, a) {
+    const handle = HANDLERS[name];
+    if (!handle) throw new AppError("Unknown tool");
+    const headers = bearer(await ctx.token());
     const writing = name === "todoist_write_tool";
-    const out = await runRemote(
-      "Todoist",
-      ctx.fetch,
-      TODOIST_MCP_URL,
-      bearer(await ctx.token()),
-      async (client) => {
-        if (name === "todoist_list_tools" && !a.name) {
-          const page = await client.listTools(a.cursor as string | undefined);
-          return { tools: (page.tools ?? []).map(summary), nextCursor: page.nextCursor ?? null };
-        }
-        const spec = await findTool(client, "Todoist", String(a.name));
-        if (name === "todoist_list_tools") {
-          return { ...summary(spec), inputSchema: spec.inputSchema ?? null };
-        }
-        const mode = accessMode(spec);
-        if (name !== `todoist_${mode}_tool`) {
-          throw new AppError(`Use todoist_${mode}_tool for this operation`);
-        }
-        const args = (a.arguments ?? {}) as Record<string, unknown>;
-        return resultData(await client.callTool(spec.name, args), "Todoist", writing);
-      },
-      writing,
-    );
-    return jsonOutput(out);
+    return jsonOutput(await server.use(ctx.fetch, headers, (s) => handle(s, a), writing));
   },
 };

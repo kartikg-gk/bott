@@ -68,10 +68,10 @@ describe("todoist", () => {
       data: { tasks: [1] },
     });
     await expect(apps.run("todoist_read_tool", { name: "add-tasks" })).rejects.toThrow(
-      "Call todoist_write_tool for this operation",
+      "That tool is a write; call it with todoist_write_tool",
     );
     await expect(apps.run("todoist_read_tool", { name: "delete-object" })).rejects.toThrow(
-      "Call todoist_write_tool",
+      "call it with todoist_write_tool",
     );
     expect(
       parse(await apps.run("todoist_write_tool", { name: "add-tasks", arguments: { a: 1 } })),
@@ -81,14 +81,14 @@ describe("todoist", () => {
       ["add-tasks", { a: 1 }],
     ]);
     await expect(apps.run("todoist_read_tool", { name: "missing" })).rejects.toThrow(
-      "Todoist did not advertise that tool",
+      "Todoist has no tool by that name",
     );
   });
 
   it("a failed write tells the bot to check before retrying", async () => {
     const { apps } = server(() => ({ isError: true, content: [] }));
     await expect(apps.run("todoist_write_tool", { name: "add-tasks" })).rejects.toThrow(
-      "Todoist returned a tool error. Look at its state before trying a write again.",
+      "The Todoist tool reported a failure. It may have changed something; look before calling it again.",
     );
     const down = new AppRunner({
       fetch: fakeFetch({ [`POST ${MCP}`]: () => new Response("x", { status: 500 }) }),
@@ -97,7 +97,7 @@ describe("todoist", () => {
       available: async () => true,
     });
     await expect(down.run("todoist_write_tool", { name: "add-tasks" })).rejects.toThrow(
-      "Todoist MCP did not confirm the result. Look first before trying a write again.",
+      "No clear answer came back from Todoist. It may have changed something; look before calling it again.",
     );
   });
 

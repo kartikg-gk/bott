@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { App } from "./app.ts";
 import { AppError, bearer, type Fetch, jsonOutput, request } from "./http.ts";
-import { findTool, type RemoteTool, resultData, runRemote } from "./mcp.ts";
+import { HostedServer, type RemoteTool } from "./mcp.ts";
 import { text, tool } from "./schema.ts";
 
 export const WISPR_MCP_URL = "https://api.wisprflow.ai/connect/mcp";
@@ -101,33 +101,24 @@ const summary = (spec: RemoteTool) => ({
   description: (spec.description ?? "").slice(0, 240),
 });
 
+const server = new HostedServer("Wispr Flow", WISPR_MCP_URL);
+
 export const wispr: App = {
   name: "wispr",
   tools,
   configured: () => false,
   async run(ctx, name, a) {
-    const out = await runRemote(
-      "Wispr Flow",
-      ctx.fetch,
-      WISPR_MCP_URL,
-      bearer(await ctx.token()),
-      async (client) => {
-        if (name === "wispr_list_tools" && !a.name) {
-          const page = await client.listTools(a.cursor as string | undefined);
-          return {
-            tools: (page.tools ?? []).filter(readable).map(summary),
-            nextCursor: page.nextCursor ?? null,
-          };
-        }
-        const spec = await findTool(client, "Wispr Flow", String(a.name));
-        if (!readable(spec)) throw new AppError("That Wispr Flow tool can change data");
-        if (name === "wispr_list_tools") {
-          return { ...summary(spec), inputSchema: spec.inputSchema ?? null };
-        }
-        const args = (a.arguments ?? {}) as Record<string, unknown>;
-        return resultData(await client.callTool(spec.name, args), "Wispr Flow");
-      },
-    );
+    const listing = name === "wispr_list_tools";
+    const out = await server.use(ctx.fetch, bearer(await ctx.token()), async (session) => {
+      if (listing && !a.name) {
+        const page = await session.catalog(a.cursor as string | undefined);
+        return { tools: page.tools.filter(readable).map(summary), nextCursor: page.nextCursor };
+      }
+      const spec = await session.lookup(String(a.name));
+      if (!readable(spec)) throw new AppError("That Wispr Flow tool can change data");
+      if (listing) return { ...summary(spec), inputSchema: spec.inputSchema ?? null };
+      return session.invoke(spec, (a.arguments ?? {}) as Record<string, unknown>);
+    });
     return jsonOutput(out);
   },
 };

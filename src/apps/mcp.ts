@@ -166,67 +166,90 @@ function parseJson(text: string): any {
   }
 }
 
-/** Finds an advertised tool, following at most 20 pages of the catalog. */
-export async function findTool(
-  client: RemoteSession,
-  provider: string,
-  name: string,
-): Promise<RemoteTool> {
-  let cursor: string | null | undefined;
-  const seen = new Set<string>();
-  for (let i = 0; i < 20; i++) {
-    const page = await client.listTools(cursor);
-    const found = (page.tools ?? []).find((spec) => spec.name === name);
-    if (found) return found;
-    cursor = page.nextCursor;
-    if (!cursor) throw new AppError(`${provider} did not advertise that tool`);
-    if (seen.has(cursor)) break;
-    seen.add(cursor);
-  }
-  throw new AppError(`${provider} returned an incomplete tool catalog`);
+const CATALOG_PAGES = 20;
+const SESSION_SECONDS = 60;
+const TEXT_LIMIT = 18000;
+
+/** One open session as an app sees it: browse the catalog, look up a tool, call it. */
+export interface HostedSession {
+  catalog(cursor?: string | null): Promise<{ tools: RemoteTool[]; nextCursor: string | null }>;
+  lookup(name: string): Promise<RemoteTool>;
+  invoke(spec: RemoteTool, args: Record<string, unknown>): Promise<unknown>;
 }
 
-/** What the bot reads from a tool result. */
-export function resultData(reply: CallResult, provider: string, mayWrite = false) {
-  if (reply.isError) {
-    const suffix = mayWrite ? " Look at its state before trying a write again." : "";
-    throw new AppError(`${provider} returned a tool error.${suffix}`);
+/** A fixed hosted tool server that one app talks to, named the way people know it. */
+export class HostedServer {
+  constructor(
+    readonly label: string,
+    readonly url: string,
+  ) {}
+
+  /**
+   * Runs `work` in a fresh session that is closed afterwards, all within one minute. Messages
+   * meant for the bot pass through; any other failure becomes one plain message. `mayWrite`
+   * adds a warning to look before repeating a call that may already have changed something.
+   */
+  async use<T>(
+    fetcher: Fetch,
+    headers: Record<string, string>,
+    work: (session: HostedSession) => Promise<T>,
+    mayWrite = false,
+  ): Promise<T> {
+    const wire = new RemoteSession(
+      fetcher,
+      this.url,
+      headers,
+      AbortSignal.timeout(SESSION_SECONDS * 1000),
+    );
+    const look = mayWrite ? " It may have changed something; look before calling it again." : "";
+    try {
+      await wire.open();
+      return await work({
+        catalog: async (cursor) => {
+          const page = await wire.listTools(cursor);
+          return { tools: page.tools ?? [], nextCursor: page.nextCursor ?? null };
+        },
+        lookup: (name) => this.lookup(wire, name),
+        invoke: async (spec, args) => {
+          const reply = await wire.callTool(spec.name, args);
+          if (reply.isError)
+            throw new AppError(`The ${this.label} tool reported a failure.${look}`);
+          return readResult(reply);
+        },
+      });
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(`No clear answer came back from ${this.label}.${look}`);
+    } finally {
+      await wire.close();
+    }
   }
-  if (reply.structuredContent !== undefined && reply.structuredContent !== null) {
-    return { data: reply.structuredContent };
+
+  /** Walks the catalog page by page until the named tool turns up. */
+  private async lookup(wire: RemoteSession, name: string): Promise<RemoteTool> {
+    const cursors = new Set<string>();
+    let cursor: string | null | undefined;
+    for (let pages = 0; pages < CATALOG_PAGES; pages++) {
+      const page = await wire.listTools(cursor);
+      const match = page.tools?.find((spec) => spec.name === name);
+      if (match) return match;
+      cursor = page.nextCursor;
+      if (!cursor) throw new AppError(`${this.label} has no tool by that name`);
+      if (cursors.has(cursor)) break;
+      cursors.add(cursor);
+    }
+    throw new AppError(`${this.label}'s tool list did not end, so the tool was not found`);
   }
-  const content = reply.content ?? [];
+}
+
+/** The structured result when there is one, otherwise the text parts joined up. */
+function readResult(reply: CallResult) {
+  const structured = reply.structuredContent;
+  if (structured !== undefined && structured !== null) return { data: structured };
+  const blocks = reply.content ?? [];
+  const texts = blocks.flatMap((block) => (block.type === "text" ? [block.text ?? ""] : []));
   return {
-    text: content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text ?? "")
-      .join("\n")
-      .slice(0, 18000),
-    hasOtherContent: content.some((block) => block.type !== "text"),
+    text: texts.join("\n").slice(0, TEXT_LIMIT),
+    hasOtherContent: texts.length < blocks.length,
   };
-}
-
-/**
- * Opens a session, runs `bridge` and closes it, all within 60 seconds. A message meant for the
- * bot passes through; anything else becomes one plain failure.
- */
-export async function runRemote<T>(
-  provider: string,
-  fetcher: Fetch,
-  url: string,
-  headers: Record<string, string>,
-  bridge: (client: RemoteSession) => Promise<T>,
-  mayWrite = false,
-): Promise<T> {
-  const client = new RemoteSession(fetcher, url, headers, AbortSignal.timeout(60000));
-  try {
-    await client.open();
-    return await bridge(client);
-  } catch (error) {
-    if (error instanceof AppError) throw error;
-    const suffix = mayWrite ? " Look first before trying a write again." : "";
-    throw new AppError(`${provider} MCP did not confirm the result.${suffix}`);
-  } finally {
-    await client.close();
-  }
 }
