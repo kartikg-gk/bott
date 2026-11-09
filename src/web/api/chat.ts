@@ -29,10 +29,20 @@ async function history(ctx: Ctx): Promise<Response> {
 }
 
 async function post(ctx: Ctx, request: Request): Promise<Response> {
-  const text = messageText(await readObject(request, "Send a JSON object with text"));
-  const item = await ctx.gateway.store.admitWeb(WEB_CHAT, ctx.actor, text);
-  await ctx.gateway.dispatch();
-  return fresh({ id: item.id.toString(), run: null }, 202);
+  const body = await readObject(request, "Send a JSON object with text");
+  const text = messageText(body);
+  const { gateway } = ctx;
+  if (!isPrompt(text)) {
+    // Control names are answered by the dispatcher, outside any run.
+    const item = await gateway.store.admitWeb(WEB_CHAT, ctx.actor, text);
+    await gateway.dispatch();
+    return fresh({ id: item.id.toString(), run: null }, 202);
+  }
+  await gateway.requireModel(ctx.account);
+  const route = await gateway.journal.route(ctx.actor, null);
+  const { run, inbox } = await gateway.queueRun(route, text, body.conversation);
+  await gateway.dispatch();
+  return fresh({ id: inbox.toString(), run }, 202);
 }
 
 async function decide(ctx: Ctx, request: Request): Promise<Response> {

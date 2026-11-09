@@ -82,7 +82,7 @@ describe.each(backends)("%s backend", (kind) => {
     const [card] = (
       await readEvents(stream, (seen) => seen.some((r) => r.type === "approval"))
     ).filter((r) => r.type === "approval");
-    expect(card).toMatchObject({ tool: "Write", run: null });
+    expect(card).toMatchObject({ tool: "Write", run: expect.any(String) });
     expect(typeof card?.expires).toBe("number");
 
     expect(

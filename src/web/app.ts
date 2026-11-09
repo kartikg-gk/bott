@@ -1,6 +1,7 @@
 import { HttpError } from "../accounts/http.ts";
 import { bearerAllowed } from "../accounts/localToken.ts";
 import { chatRoutes } from "./api/chat.ts";
+import { runRoutes } from "./api/runs.ts";
 import type { ApiRouter, Ctx } from "./context.ts";
 import type { Gateway } from "./gateway.ts";
 import { fresh, Router } from "./router.ts";
@@ -17,6 +18,7 @@ export interface AppOptions {
 export function apiRouter(): ApiRouter {
   const router: ApiRouter = new Router<Ctx>();
   chatRoutes(router);
+  runRoutes(router);
   return router;
 }
 

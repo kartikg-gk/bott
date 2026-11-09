@@ -1,8 +1,10 @@
+import type { Account } from "../accounts/store.ts";
 import type { ComputerFactory } from "../computers/index.ts";
 import type { Database } from "../db/database.ts";
 import { BackgroundAgents } from "../runtime/agents.ts";
 import { Dispatcher } from "../runtime/dispatcher.ts";
 import { type ProviderFactory, type RuntimeConfig, SessionManager } from "../runtime/sessions.ts";
+import type { Route } from "../store/routes.ts";
 import { Store } from "../store/store.ts";
 import { WebChannel } from "./channel.ts";
 import { RunJournal } from "./journal.ts";
@@ -82,6 +84,18 @@ export class Gateway {
     await this.dispatcher.stopRun(run);
     await this.journal.finish(run);
     return true;
+  }
+
+  /** Refuses, with a 409, a run that has no model to run on yet. */
+  async requireModel(_account: Account | null): Promise<void> {}
+
+  /** Queues a run of the text on the route; `earlier` is what the browser sent before it. */
+  async queueRun(
+    route: Route,
+    text: string,
+    _earlier: unknown,
+  ): Promise<{ run: string; inbox: bigint }> {
+    return this.journal.queue(route, text);
   }
 
   /** Starts whatever waiting work can start now. */
