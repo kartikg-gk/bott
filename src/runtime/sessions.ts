@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
 import { appendFile, mkdir, rm, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import type { ToolCall } from "../agent/engine.ts";
 import { buildSystem } from "../agent/instructions.ts";
-import type { Policy } from "../agent/policy.ts";
+import { instructionGuard, type Policy } from "../agent/policy.ts";
 import type { ModelProvider } from "../agent/providers/types.ts";
 import {
   AgentSession,
@@ -226,6 +227,23 @@ export class SessionManager {
 
   private get settings(): ComputerSettings {
     return this.config.computer ?? computerSettings({});
+  }
+
+  /** Which calls touch the bot's notes or skills, as its computer sees them. */
+  private instructionsGuard(bot: Bot): (call: ToolCall) => boolean {
+    const ws = this.workspaceFor(bot);
+    const root = botRoot(this.config.stateDir, bot);
+    const roots = this.sandboxed
+      ? ws.memoryPath
+        ? [ws.memoryPath]
+        : []
+      : [join(root, "memory"), join(root, "skills"), join(this.config.stateDir, "skills")];
+    return instructionGuard({
+      root: ws.root,
+      roots,
+      posix: this.sandboxed,
+      windows: process.platform === "win32" && !this.sandboxed,
+    });
   }
 
   /** Copies a saved note into a sandbox, which keeps its own copy of the notes. */
@@ -772,6 +790,7 @@ export class SessionManager {
       policy: opts.policy ?? this.config.policy,
       // Containers and sandboxes run a POSIX shell whatever this machine is.
       windowsShell: process.platform === "win32" && !this.sandboxed,
+      steers: this.instructionsGuard(bot),
       store: this.storeFor(sessionFile),
       clock: () => this.now(),
       ...(this.config.approvalSeconds === undefined

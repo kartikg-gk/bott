@@ -299,6 +299,57 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await sessions.delegate(route, writer, "something else")).toBe("second task done");
   });
 
+  it("writing a skill or note file asks the person, even under auto", async () => {
+    const { store, config, manager } = await setup();
+    config.approvalSeconds = 1;
+    const chief = (await store.bot((await store.chief()).id)) as Bot;
+    const write: StreamEvent[] = [
+      { type: "start", model: "m" },
+      {
+        type: "end",
+        entry: {
+          role: "assistant",
+          content: [
+            {
+              type: "call",
+              id: "c1",
+              name: "Write",
+              input: { path: "tools/SKILL.md", content: "x" },
+            },
+          ],
+          model: "m",
+          usage: emptyUsage(),
+          stop: "end",
+        },
+      },
+    ];
+    const turns = [write, reply("left it")];
+    const sessions = manager(() => ({
+      id: "fake",
+      async *stream() {
+        const next = turns.shift();
+        if (!next) throw new Error("no scripted reply left");
+        yield* next;
+      },
+    }));
+    const route = await store.conversation(1, 1);
+    const asked: string[] = [];
+    const ticking = setInterval(() => {
+      now += 1;
+    }, 50);
+    try {
+      await sessions.prompt(route, "save a skill", {
+        onEvent: (e) => {
+          if (e.type === "approval_requested") asked.push(e.tool);
+        },
+      });
+    } finally {
+      clearInterval(ticking);
+    }
+    expect(asked).toEqual(["Write"]);
+    expect(existsSync(join(sessions.workspaceFor(chief).root, "tools", "SKILL.md"))).toBe(false);
+  });
+
   it("idle sessions are closed after idleSeconds", async () => {
     const { store, manager } = await setup(true);
     const { factory, requests } = scripted("noted", "still here");

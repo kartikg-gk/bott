@@ -222,6 +222,54 @@ describe("AgentSession", () => {
     expect(JSON.stringify(result)).toContain("send_mail needs approval, and nobody can give it");
   });
 
+  it("a call the guard says steers later runs asks, even under auto", async () => {
+    const provider = fakeProvider([
+      reply([call("w1", "Write", { file_path: "SKILL.md" })]),
+      reply([text("asked")]),
+    ]);
+    const ran: string[] = [];
+    const session = await open("s5c", provider, {
+      tools: [{ ...writeTool(ran), input: z.object({ file_path: z.string() }) }],
+      policy: "auto",
+      steers: (c) => c.name === "Write",
+    });
+    await session.request("prompt", { message: "save" });
+    const seen = await untilSettled(session, async (e) => {
+      if (e.type === "approval_requested") {
+        await session.request("respond_to_approval", { approvalId: e.id, allow: false });
+      }
+    });
+    expect(seen.some((e) => e.type === "approval_requested")).toBe(true);
+    expect(ran).toEqual([]);
+  });
+
+  it("an unattended session under ask still runs commands that only look", async () => {
+    const provider = fakeProvider([
+      reply([call("b1", "Bash", { command: "ls -la" })]),
+      reply([text("listed")]),
+    ]);
+    const ran: string[] = [];
+    const shell: ToolSpec = {
+      name: "Bash",
+      description: "shell",
+      input: z.object({ command: z.string() }),
+      readOnly: false,
+      async run() {
+        ran.push("Bash");
+        return { content: [text("a b")] };
+      },
+    };
+    const session = await open("s5d", provider, {
+      tools: [shell],
+      policy: "ask",
+      unattended: true,
+      windowsShell: false,
+    });
+    await session.request("prompt", { message: "look" });
+    await untilSettled(session);
+    expect(ran).toEqual(["Bash"]);
+  });
+
   it("abort kills the running command and settles", async () => {
     let killed = false;
     const slow: ToolSpec = {

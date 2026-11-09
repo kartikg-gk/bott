@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 import { CompactionError, compact, estimate, needsCompaction, SUMMARY_PREFIX } from "./budget.ts";
 import { type AgentEvent, runAgentLoop, type ToolCall } from "./engine.ts";
-import { makeBeforeToolCall, type Policy } from "./policy.ts";
+import { makeBeforeToolCall, type Policy, readOnlyCommand, shellCommand } from "./policy.ts";
 import type { ModelProvider } from "./providers/types.ts";
 import type { SessionStore } from "./sessionStore.ts";
 import { memorySessionStore } from "./sessionStore.ts";
@@ -106,6 +106,11 @@ export interface SessionOptions {
    * the deadline.
    */
   unattended?: boolean;
+  /**
+   * Whether a call touches something that steers later runs, such as a skill or note file.
+   * Such a call asks the person whatever the policy, as a reviewed tool does.
+   */
+  steers?: (call: ToolCall) => boolean;
 }
 
 /** Why a call that needs approval is refused in an unattended run. */
@@ -389,7 +394,13 @@ export class AgentSession {
         followUps: () => this.followUps.splice(0),
         // A reviewed tool asks every time; it is refused outright only when the policy denies.
         beforeToolCall: (call) => {
-          const reviewed = this.reviewed.has(call.name) && policy !== "deny";
+          const command = shellCommand(call);
+          if (command !== null && readOnlyCommand(command, this.opts.windowsShell)) {
+            return Promise.resolve({ allow: true });
+          }
+          const reviewed =
+            (this.reviewed.has(call.name) || this.opts.steers?.(call) === true) &&
+            policy !== "deny";
           const asks = reviewed || (policy === "ask" && !this.readOnly.has(call.name));
           if (asks && this.opts.unattended === true) {
             return Promise.resolve({ allow: false, reason: `${call.name} ${NOBODY_TO_ASK}.` });
