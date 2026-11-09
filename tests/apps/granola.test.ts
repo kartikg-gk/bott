@@ -53,10 +53,10 @@ describe("granola", () => {
     expect(first.privateNotes).toBeNull();
     expect(first.nextOffset).toBe(1000);
     await expect(apps.run("granola_get_note", { note_id: "../x" })).rejects.toThrow(
-      "Give a note ID taken from the list of notes",
+      "Use a note ID that granola_list_notes gave back",
     );
     await expect(apps.run("granola_get_transcript", { note_id: NOTE })).rejects.toThrow(
-      "This page of the transcript is too big",
+      "ask for a smaller page_size",
     );
   });
 

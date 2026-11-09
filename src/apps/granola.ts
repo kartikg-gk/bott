@@ -11,19 +11,19 @@ const NOTE_FIELDS = ["id", "title", "owner", "created_at", "updated_at", "delete
 const tools = [
   tool(
     "granola_list_notes",
-    "Show Granola notes you can reach, narrowed by date, folder or space if wanted.",
+    "Meeting notes the person can open, narrowed by date, folder or space when given.",
     { ...paging, ...Object.fromEntries(FILTERS.map((f) => [f, text])) },
     { optional: "all" },
   ),
   tool(
     "granola_get_note",
-    "Read a note with a page of its summary and, when present, its private notes.",
+    "One note's details, with a page of its summary and of the person's own notes when it has them.",
     { note_id: text, offset },
     { optional: ["offset"] },
   ),
   tool(
     "granola_get_transcript",
-    "Read a page of a transcript, passing the cursor returned for the next one.",
+    "A page of what was said in the meeting; send the cursor back for the next page.",
     { note_id: text, ...paging },
     { optional: ["cursor", "page_size"] },
   ),
@@ -44,7 +44,7 @@ export async function checkGranolaKey(fetcher: Fetch, key: string): Promise<void
     timeoutMs: 15000,
   });
   if (!body || typeof body !== "object" || !Array.isArray(body.notes)) {
-    throw new AppError("Granola sent back no list of notes");
+    throw new AppError("Granola's reply had no notes in it");
   }
 }
 
@@ -74,7 +74,7 @@ export const granola: App = {
     }
     const note = String(a.note_id);
     if (!/^[nN][oO][tT]_[A-Za-z0-9]{14}$/.test(note)) {
-      throw new AppError("Give a note ID taken from the list of notes");
+      throw new AppError("Use a note ID that granola_list_notes gave back");
     }
     const url = `${NOTES}/${note}`;
     if (name === "granola_get_transcript") {
@@ -82,7 +82,9 @@ export const granola: App = {
       if (a.cursor) params.cursor = a.cursor;
       const out = page(await get(`${url}/transcript`, params), "transcript");
       if (JSON.stringify(out).length > 19000) {
-        throw new AppError("This page of the transcript is too big; ask for a smaller page_size.");
+        throw new AppError(
+          "That many transcript entries is too much at once; ask for a smaller page_size.",
+        );
       }
       return jsonOutput(out);
     }
