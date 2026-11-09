@@ -118,6 +118,7 @@ export class Dispatcher {
   private readonly workers: number;
   private readonly exchange: ExchangeHooks | undefined;
   private readonly observer: RunObserver | undefined;
+  private readonly wrap: (<T>(work: () => Promise<T>) => Promise<T>) | undefined;
   private ticking: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -128,8 +129,11 @@ export class Dispatcher {
       workers?: number | undefined;
       exchange?: ExchangeHooks | undefined;
       observer?: RunObserver | undefined;
+      /** Runs each prompt's whole run inside it, such as an account's per-run limits. */
+      wrap?: (<T>(work: () => Promise<T>) => Promise<T>) | undefined;
     } = {},
   ) {
+    this.wrap = opts.wrap;
     this.exchange = opts.exchange;
     this.observer = opts.observer;
     const workers = opts.workers ?? Number.POSITIVE_INFINITY;
@@ -146,6 +150,11 @@ export class Dispatcher {
     const next = this.ticking.then(() => this.dispatch());
     this.ticking = next.catch(() => {});
     return next;
+  }
+
+  /** How many runs are in progress. */
+  running(): number {
+    return this.active.size;
   }
 
   /** Resolves once no run is in progress. */
@@ -295,7 +304,8 @@ export class Dispatcher {
       done: Promise.resolve(),
     };
     this.active.set(route.id, active);
-    active.done = this.run(active).finally(() => {
+    const work = () => this.run(active);
+    active.done = (this.wrap ? this.wrap(work) : work()).finally(() => {
       this.active.delete(route.id);
     });
   }

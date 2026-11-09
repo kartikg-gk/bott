@@ -42,6 +42,9 @@ export function follow(ctx: Ctx, run: string, after: number): Response {
       const quit = () => wake?.();
       out.signal.addEventListener("abort", quit);
       let cursor = after;
+      // The finish time is set just before the final event is written; a follower that sees
+      // the time first waits one more round for the event.
+      let ending = false;
       try {
         while (!journal.closed && !out.signal.aborted) {
           if (!(await ctx.alive())) break;
@@ -59,8 +62,10 @@ export function follow(ctx: Ctx, run: string, after: number): Response {
               `id: ${event.seq}\nevent: ${event.kind}\ndata: ${JSON.stringify(payload)}\n\n`,
             );
             cursor = event.seq;
+            if (event.kind === "run_finished") ending = true;
           }
-          if (view === null || view.finished !== null) break;
+          if (view === null || ending) break;
+          if (view.finished !== null) ending = true;
           if (news) continue;
           const woke = await new Promise<boolean>((resolve) => {
             const timer = setTimeout(() => resolve(false), WAIT_MS);

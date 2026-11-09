@@ -1,6 +1,8 @@
+import { HttpError } from "../accounts/http.ts";
 import type { Account } from "../accounts/store.ts";
 import type { ComputerFactory } from "../computers/index.ts";
 import type { Database } from "../db/database.ts";
+import type { ModelLimits } from "../limits/limits.ts";
 import { BackgroundAgents } from "../runtime/agents.ts";
 import { Dispatcher } from "../runtime/dispatcher.ts";
 import { type ProviderFactory, type RuntimeConfig, SessionManager } from "../runtime/sessions.ts";
@@ -26,6 +28,10 @@ export interface GatewayOptions {
   computers?: ComputerFactory;
   /** Seconds since the epoch, as a float. */
   clock?: () => number;
+  /** Request and spend limits; each run counts against one budget of its own. */
+  limits?: ModelLimits;
+  /** Runs wait until the signed-in account has chosen a model and saved a key. */
+  requireAccountModel?: boolean;
 }
 
 /** One instance's whole runtime, as the web endpoints use it. */
@@ -40,22 +46,29 @@ export class Gateway {
     readonly actor: number,
     readonly hosted: boolean,
     readonly runtime: RuntimeConfig,
+    private readonly accountModel: boolean,
   ) {}
 
   static async open(opts: GatewayOptions): Promise<Gateway> {
     const store = await Store.open(opts.db, opts.instance, opts.clock ? { clock: opts.clock } : {});
     const sessions = new SessionManager(opts.runtime, store, opts.providers, opts.computers);
     const journal = new RunJournal(store);
+    const { limits } = opts;
     const channel = new WebChannel(journal);
     const dispatcher = new Dispatcher(store, sessions, channel, {
       workers: opts.workers,
+      wrap: limits ? (work) => limits.operation(() => work()) : undefined,
       observer: {
         started: (item, bot) => journal.emit(item.run as string, "run_started", { bot }),
         answered: (item, text) => journal.answer(item.run as string, text),
         closed: async (item) => {
           const run = item.run as string;
-          const usage = channel.takeUsage(run);
-          if (usage.model_messages > 0) await journal.emit(run, "run_usage", usage);
+          const usage: Record<string, number> = { ...channel.takeUsage(run) };
+          // Still inside the run's operation, so the budget read here is this run's own.
+          if (limits?.spendMetered) usage.reserved_micros = limits.scope().spendMicros;
+          if (usage.model_messages || "reserved_micros" in usage) {
+            await journal.emit(run, "run_usage", usage);
+          }
           await journal.finish(run);
         },
       },
@@ -74,6 +87,7 @@ export class Gateway {
       opts.actor ?? DEFAULT_ACTOR,
       opts.hosted ?? false,
       opts.runtime,
+      opts.requireAccountModel ?? false,
     );
   }
 
@@ -89,7 +103,11 @@ export class Gateway {
   }
 
   /** Refuses, with a 409, a run that has no model to run on yet. */
-  async requireModel(_account: Account | null): Promise<void> {}
+  async requireModel(account: Account | null): Promise<void> {
+    if (this.accountModel && account && !account.provider) {
+      throw new HttpError(409, "Choose a model and save its key under Account before you start");
+    }
+  }
 
   /** Queues a run of the text on the route; `earlier` is what the browser sent before it. */
   async queueRun(
@@ -98,6 +116,11 @@ export class Gateway {
     _earlier: unknown,
   ): Promise<{ run: string; inbox: bigint }> {
     return this.journal.queue(route, text);
+  }
+
+  /** Whether a run or a background agent is going. */
+  working(): boolean {
+    return this.dispatcher.running() > 0 || this.agents.running() > 0;
   }
 
   /** Starts whatever waiting work can start now. */

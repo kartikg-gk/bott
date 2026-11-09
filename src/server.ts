@@ -6,6 +6,17 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 
+export { AccountGateways, type AccountGatewaysOptions } from "./web/accounts.ts";
+export {
+  type AppOptions,
+  createApp as createHandler,
+  type GoogleAuth,
+  PROXY_HEADER,
+  PROXY_SECRET_VARIABLE,
+  type TokenAuth,
+} from "./web/app.ts";
+export { Gateway, type GatewayOptions } from "./web/gateway.ts";
+
 export type RequestHandler = (request: Request) => Promise<Response>;
 
 /** Turns a Node request into a Web one; its signal aborts when the client goes away. */

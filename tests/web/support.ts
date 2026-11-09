@@ -133,7 +133,10 @@ export class Harness {
 
   /** A handler for one gateway, with a helper that sends the token. */
   app(gateway: Gateway) {
-    const handler = createApp({ token: TOKEN, gateway, page: "<html>page</html>" });
+    const handler = createApp({
+      auth: { mode: "token", token: TOKEN, gateway },
+      page: "<html>page</html>",
+    });
     const call = (path: string, init: RequestInit & { json?: unknown } = {}) => {
       const headers = new Headers(init.headers);
       if (!headers.has("authorization")) headers.set("authorization", `Bearer ${TOKEN}`);
