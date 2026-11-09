@@ -31,6 +31,7 @@ import {
   STYLES,
   savedSession,
 } from "../bots/profiles.ts";
+import { ensureStarters } from "../bots/starters.ts";
 import { type ComputerFactory, makeComputer } from "../computers/index.ts";
 import { type ComputerSettings, computerSettings } from "../computers/settings.ts";
 import { Lease } from "../db/leases.ts";
@@ -709,8 +710,13 @@ export class SessionManager {
     const plugins = this.apps
       ? await this.apps.enabled(bot.id)
       : await this.store.pluginsFor(bot.id);
-    // The bot's own skills come first, so one of its own wins over a shared one of that name.
-    const skills = loadSkills([join(root, "skills"), join(this.config.stateDir, "skills")]);
+    // The bot's own skills come first, so one of its own wins over a shared one of that name;
+    // the starters that ship with the server come last.
+    const skills = loadSkills([
+      join(root, "skills"),
+      join(this.config.stateDir, "skills"),
+      ensureStarters(this.config.stateDir),
+    ]);
     const ws = this.workspaceFor(bot);
     const sections = [systemAddition(bot, notesDir, ws.memoryPath)];
     const style = STYLES[settings.style as keyof typeof STYLES] ?? "";

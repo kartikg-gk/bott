@@ -165,7 +165,8 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(asChief?.req.system).toContain("Likes tea");
     expect(asChief?.req.system).toContain("- brew: How to brew");
     expect(asChief?.req.system).not.toContain("Likes coffee");
-    expect(asChief?.req.system).not.toContain("draft");
+    expect(asChief?.req.system).not.toContain("- draft: How to draft");
+    expect(asChief?.req.system).toContain("- skill-authoring: ");
     expect(asWriter?.bot).toBe("Writer");
     expect(asWriter?.req.system).toContain("You are Writer. Purpose: Drafts text");
     expect(asWriter?.req.system).toContain("Likes coffee");
