@@ -17,6 +17,7 @@ import {
 } from "./providers.ts";
 import { AppRunner } from "./registry.ts";
 import { TELEGRAM_APP_TOKEN, TELEGRAM_MAIN_TOKEN, TelegramLinks } from "./telegram.ts";
+import { checkTinyfishKey, providerKeyValid } from "./tinyfish.ts";
 import { registerWisprClient } from "./wispr.ts";
 
 export {
@@ -53,6 +54,7 @@ export const KEY_APPS: Record<
   }
 > = {
   granola: { label: "Granola", valid: granolaKeyValid, check: checkGranolaKey },
+  tinyfish: { label: "TinyFish", valid: providerKeyValid, check: checkTinyfishKey },
 };
 
 /** Who is asking: the signed-in account, its browser session, and a fresh check it still is. */

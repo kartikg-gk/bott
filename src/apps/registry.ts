@@ -13,6 +13,7 @@ import { notion } from "./notion.ts";
 import { sheets } from "./sheets.ts";
 import { tasks } from "./tasks.ts";
 import { telegram } from "./telegram.ts";
+import { tinyfish } from "./tinyfish.ts";
 import { todoist } from "./todoist.ts";
 import { webScrape } from "./webScrape.ts";
 import { webSearch } from "./webSearch.ts";
@@ -33,6 +34,7 @@ const ORDER: App[] = [
   todoist,
   wispr,
   granola,
+  tinyfish,
   webSearch,
   webScrape,
   telegram,
