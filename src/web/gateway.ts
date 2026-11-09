@@ -39,6 +39,7 @@ export class Gateway {
     readonly journal: RunJournal,
     readonly actor: number,
     readonly hosted: boolean,
+    readonly runtime: RuntimeConfig,
   ) {}
 
   static async open(opts: GatewayOptions): Promise<Gateway> {
@@ -72,6 +73,7 @@ export class Gateway {
       journal,
       opts.actor ?? DEFAULT_ACTOR,
       opts.hosted ?? false,
+      opts.runtime,
     );
   }
 
