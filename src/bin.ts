@@ -17,4 +17,9 @@ process.exitCode = await main(process.argv.slice(2), {
   cwd: process.cwd(),
   out: (line) => console.log(line),
   signal: stop.signal,
+  stdin: async () => {
+    const parts: Buffer[] = [];
+    for await (const part of process.stdin) parts.push(part as Buffer);
+    return Buffer.concat(parts).toString("utf8");
+  },
 });

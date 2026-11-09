@@ -12,6 +12,7 @@ import { parseArgs, parseEnv } from "node:util";
 import { CLIENT_ID_VARIABLE, CLIENT_SECRET_VARIABLE } from "./accounts/google.ts";
 import { TOKEN_VARIABLE } from "./accounts/localToken.ts";
 import { MASTER_KEY_VARIABLE, masterKey } from "./accounts/sealing.ts";
+import { ExtraError, skills, task } from "./cliExtra.ts";
 import { type Config, ConfigError, type Env, PROVIDER_KEYS, readConfig } from "./config.ts";
 import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { databaseStatus, SCHEMA_MARK } from "./db/status.ts";
@@ -32,6 +33,8 @@ export interface Io {
   signal?: AbortSignal;
   /** One provider for every bot, as in tests. */
   providers?: ProviderFactory;
+  /** Reads what was piped in, for a task given as `-`. */
+  stdin?: () => Promise<string>;
 }
 
 const USAGE = [
@@ -41,6 +44,8 @@ const USAGE = [
   "  run                  Serve the page and API on BOTT_HOST:BOTT_PORT",
   "  runner [--once]      Run scheduled jobs and wake-ups under a database lease",
   "  doctor               Check the settings and the database without changing them",
+  "  task TEXT [--bot NAME] [--deadline S] [--json]  Run one task with a bot; - reads it piped in",
+  "  skills [list|add FOLDER|remove NAME] [--bot NAME]  Look after shared or one bot's skills",
   "  db check             Show the database backend, that it answers, and its schema",
   "  db import [--from PATH]  Copy a local SQLite instance into D1",
 ].join("\n");
@@ -286,7 +291,7 @@ async function db(io: Io, config: Config, args: string[]): Promise<number> {
 
 type Command = (io: Io, config: Config, args: string[]) => Promise<number>;
 
-const COMMANDS: Record<string, Command> = { init, run, runner, doctor, db };
+const COMMANDS: Record<string, Command> = { init, run, runner, doctor, db, task, skills };
 
 /** Runs one command and returns the exit code: 0 done, 1 failed, 2 not understood. */
 export async function main(argv: string[], io: Io): Promise<number> {
@@ -305,6 +310,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     if (
       error instanceof ConfigError ||
       error instanceof CommandError ||
+      error instanceof ExtraError ||
       error instanceof ImportError
     ) {
       io.out(error.message);

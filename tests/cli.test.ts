@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
@@ -149,6 +149,71 @@ describe("the command line", () => {
     expect(done?.lastAnswer).toContain("hello from the job");
     expect(await main(["runner", "--once"], io(env, { providers }).io)).toBe(0);
     await db.close();
+  });
+
+  it("runs one task with a bot and prints the answer and what it used", async () => {
+    const state = folder();
+    const env = { BOTT_STATE_DIR: state, BOTT_WEB_TOKEN: TOKEN };
+    expect(await main(["init"], io(env).io)).toBe(0);
+    const usage = { input: 12, output: 3, cacheRead: 0, cacheWrite: 0 };
+    const providers = () => gated([reply("all tidy", usage as never)]);
+    const plain = io(env, { providers });
+    expect(await main(["task", "tidy the notes"], plain.io)).toBe(0);
+    expect(plain.lines[0]).toBe("all tidy");
+    expect(plain.text()).toMatch(/completed \| input 12 \| output 3/);
+
+    const asJson = io(env, { providers: () => gated([reply("done")]) });
+    expect(await main(["task", "again", "--json"], asJson.io)).toBe(0);
+    expect(JSON.parse(asJson.lines[0] as string)).toMatchObject({
+      status: "completed",
+      answer: "done",
+      usage: { model_messages: 1 },
+    });
+
+    const piped = io(env, {
+      providers: () => gated([reply("read it")]),
+      stdin: async () => "from a pipe",
+    });
+    expect(await main(["task", "-"], piped.io)).toBe(0);
+    expect(piped.lines[0]).toBe("read it");
+
+    for (const args of [["task"], ["task", "/stop"], ["task", "x", "--bot", "Nobody"]]) {
+      const refused = io(env, { providers });
+      expect(await main(args, refused.io)).not.toBe(0);
+    }
+    const slow = io(env, { providers });
+    expect(await main(["task", "x", "--deadline", "0"], slow.io)).toBe(1);
+    expect(slow.text()).toMatch(/deadline/);
+  });
+
+  it("lists, adds and removes skill folders, shared or for one bot", async () => {
+    const state = folder();
+    const env = { BOTT_STATE_DIR: state, BOTT_WEB_TOKEN: TOKEN };
+    expect(await main(["init"], io(env).io)).toBe(0);
+    const source = folder();
+    const skill = join(source, "brew");
+    mkdirSync(skill);
+    writeFileSync(join(skill, "SKILL.md"), "---\nname: brew\ndescription: Make tea\n---\nBoil.\n");
+
+    expect(await main(["skills", "add", skill], io(env).io)).toBe(0);
+    expect(existsSync(join(state, "skills", "brew", "SKILL.md"))).toBe(true);
+    const listed = io(env);
+    expect(await main(["skills"], listed.io)).toBe(0);
+    const shared = JSON.parse(listed.text()) as { name: string; managed: boolean }[];
+    expect(shared).toContainEqual({ name: "brew", description: "Make tea", managed: true });
+
+    const chief = io(env);
+    expect(await main(["skills", "add", skill, "--bot", "Chief of Staff"], chief.io)).toBe(0);
+    const forBot = io(env);
+    expect(await main(["skills", "list", "--bot", "Chief of Staff"], forBot.io)).toBe(0);
+    const names = (JSON.parse(forBot.text()) as { name: string }[]).map((s) => s.name);
+    expect(names.filter((name) => name === "brew")).toHaveLength(1);
+
+    expect(await main(["skills", "remove", "brew"], io(env).io)).toBe(0);
+    expect(existsSync(join(state, "skills", "brew"))).toBe(false);
+    expect(await main(["skills", "remove", "brew"], io(env).io)).toBe(1);
+    expect(await main(["skills", "add"], io(env).io)).toBe(1);
+    expect(await main(["skills", "list", "--bot", "Nobody"], io(env).io)).toBe(1);
   });
 
   it("checks the database without making one", async () => {
