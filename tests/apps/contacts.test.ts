@@ -52,7 +52,7 @@ describe("contacts", () => {
     expect(fetcher.seen[1]?.url.searchParams.get("pageSize")).toBe("5");
     expect(fetcher.seen[1]?.url.searchParams.get("sources")).toBe("READ_SOURCE_TYPE_CONTACT");
     await expect(apps.run("contacts_search", { query: "  " })).rejects.toThrow(
-      "Give some text to search contacts for",
+      "Say who to look for",
     );
   });
 });

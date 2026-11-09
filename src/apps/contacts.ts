@@ -22,7 +22,7 @@ export const contacts: App = {
   tools: [
     tool(
       "contacts_search",
-      "Look up Google contacts by name, email, phone or organization.",
+      "Looks people up in the person's contacts by name, email, phone or company.",
       { query: text, limit: z.number().int().min(1).max(30) },
       { optional: ["limit"] },
     ),
@@ -30,7 +30,7 @@ export const contacts: App = {
   configured: () => false,
   async run(ctx, _name, args) {
     const query = String(args.query).trim();
-    if (!query) throw new AppError("Give some text to search contacts for");
+    if (!query) throw new AppError("Say who to look for");
     const api = googleApi(ctx.fetch, await ctx.token());
     const params = { readMask: Object.keys(FIELDS).join(","), sources: "READ_SOURCE_TYPE_CONTACT" };
     // An empty search first warms the contact index, as the People API asks.
