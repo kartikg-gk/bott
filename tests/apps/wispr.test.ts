@@ -151,4 +151,51 @@ describe("wispr", () => {
     });
     await db.close();
   });
+
+  it("refuses discovery lists sent as plain strings", async () => {
+    const { db } = database("sqlite");
+    const store = await Store.open(db, "main");
+    const tampered = [
+      {
+        "GET https://api.wisprflow.ai/.well-known/oauth-protected-resource/connect/mcp": () =>
+          json({
+            resource: MCP,
+            authorization_servers: `${ISSUER} https://evil.test`,
+            scopes_supported: "openid offline_access",
+          }),
+      },
+      {
+        [`GET ${ISSUER}/.well-known/oauth-authorization-server`]: () =>
+          json({
+            issuer: ISSUER,
+            authorization_endpoint: `${ISSUER}/oauth2/authorize`,
+            token_endpoint: `${ISSUER}/oauth2/token`,
+            registration_endpoint: `${ISSUER}/oauth2/register`,
+            code_challenge_methods_supported: "plain S256",
+            token_endpoint_auth_methods_supported: "none",
+          }),
+      },
+    ];
+    for (const routes of tampered) {
+      const fetcher = fakeFetch({
+        ...discovery,
+        ...routes,
+        [`POST ${ISSUER}/oauth2/register`]: () =>
+          json({ client_id: "client-1", token_endpoint_auth_method: "none" }),
+      });
+      const connections = new AppConnections({
+        credentials: new MemoryCredentials(),
+        flows: new MemoryFlows(),
+        storeFor: async () => store,
+        origin: "https://bott.test",
+        fetch: fetcher,
+        env: {},
+      });
+      await expect(
+        connections.connect({ account: "a", session: "s" }, "wispr"),
+      ).rejects.toMatchObject({ status: 502 });
+      expect(fetcher.seen.some((req) => req.method === "POST")).toBe(false);
+    }
+    await db.close();
+  });
 });

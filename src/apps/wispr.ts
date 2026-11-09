@@ -31,6 +31,10 @@ const tools = [
 // biome-ignore lint/suspicious/noExplicitAny: discovery documents are checked field by field
 type Item = Record<string, any>;
 
+/** Whether a discovery field is a list holding `value`; a string must not pass as one. */
+const lists = (field: unknown, value: string): boolean =>
+  Array.isArray(field) && field.includes(value);
+
 /**
  * Registers a public OAuth client for this server's callback, after checking that the
  * provider's discovery documents name the expected issuer and endpoints.
@@ -40,8 +44,8 @@ export async function registerWisprClient(fetcher: Fetch, callback: string): Pro
   if (
     !resource ||
     resource.resource !== WISPR_MCP_URL ||
-    !(resource.authorization_servers ?? []).includes(ISSUER) ||
-    !WISPR_SCOPES.every((s) => (resource.scopes_supported ?? []).includes(s))
+    !lists(resource.authorization_servers, ISSUER) ||
+    !WISPR_SCOPES.every((s) => lists(resource.scopes_supported, s))
   ) {
     throw new AppError("Wispr Flow described its tool server in a way this app does not trust");
   }
@@ -60,8 +64,8 @@ export async function registerWisprClient(fetcher: Fetch, callback: string): Pro
   if (
     !server ||
     Object.entries(expected).some(([key, value]) => server[key] !== value) ||
-    !(server.code_challenge_methods_supported ?? []).includes("S256") ||
-    !(server.token_endpoint_auth_methods_supported ?? []).includes("none")
+    !lists(server.code_challenge_methods_supported, "S256") ||
+    !lists(server.token_endpoint_auth_methods_supported, "none")
   ) {
     throw new AppError("Wispr Flow described its sign-in server in a way this app does not trust");
   }
@@ -83,7 +87,7 @@ export async function registerWisprClient(fetcher: Fetch, callback: string): Pro
     id.length > 1024 ||
     /\s/.test(id) ||
     (client.token_endpoint_auth_method ?? "none") !== "none" ||
-    !(client.redirect_uris ?? [callback]).includes(callback)
+    !lists(client.redirect_uris ?? [callback], callback)
   ) {
     throw new AppError("Wispr Flow's answer to the client registration was not usable");
   }
