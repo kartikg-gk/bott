@@ -90,11 +90,11 @@ export function dockerComputer(opts: DockerOptions): Workspace {
   async function verifyNetwork(): Promise<void> {
     const found = await cli(["inspect", "--format", "{{.HostConfig.NetworkMode}}", opts.name]);
     if (found.code !== 0)
-      throw new ComputerError("The container network setting could not be checked");
+      throw new ComputerError(`Docker would not report the network mode of ${opts.name}`);
     const closed = found.stdout.toString("utf8").trim() === "none";
     if (closed !== (opts.network === "closed")) {
       throw new ComputerError(
-        `Container ${opts.name} needs to be recreated to use the ${opts.network} network setting`,
+        `${opts.name} was made with its network ${closed ? "closed" : "open"}, but the setting is ${opts.network}; delete it so it is made again`,
       );
     }
   }

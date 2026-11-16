@@ -154,7 +154,7 @@ describe("docker computer", () => {
         "inspect {{json .Mounts}}": () => ok(RO_MOUNT),
       });
       await expect(computer(cli, network).run("x", opts())).rejects.toThrow(
-        `Container bott-bot-main-abc needs to be recreated to use the ${network} network setting`,
+        `bott-bot-main-abc was made with its network ${mode === "none" ? "closed" : "open"}, but the setting is ${network}`,
       );
       expect(calls.some((c) => c[0] === "exec")).toBe(false);
     }
