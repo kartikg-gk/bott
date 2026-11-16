@@ -156,7 +156,7 @@ describe("telegram", () => {
     server.failNext();
     expect((await apps.call(bot, "telegram_send_message", { text: "Again" })).content[0]).toEqual({
       type: "text",
-      text: "It is unclear whether Telegram delivered it; look at the linked chat before trying again.",
+      text: "Telegram may or may not have delivered it. Look at the chat before sending again.",
     });
     expect(await connections.disconnect(caller, "telegram")).toEqual({
       connected: false,

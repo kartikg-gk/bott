@@ -40,7 +40,9 @@ describe("documents", () => {
     expect(documentKind(jpeg(640, 480), "image/jpeg")).toBe("image");
     expect(() => documentKind(pdf, "image/png")).toThrow("Only PDF, PNG and JPEG files");
     expect(() => documentKind(png(7000, 10), "image/png")).toThrow("too large in width or height");
-    expect(() => documentKind(jpeg(5000, 5000), "image/jpeg")).toThrow("too large in width or height");
+    expect(() => documentKind(jpeg(5000, 5000), "image/jpeg")).toThrow(
+      "too large in width or height",
+    );
   });
 
   it("uses the PDF's own text first and pages it", async () => {

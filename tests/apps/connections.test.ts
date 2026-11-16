@@ -161,7 +161,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     );
     expect(await credentials.get("acct", "app", "gmail")).toBeNull();
     expect(await store.pluginsFor(bot.id)).toEqual([]);
-    await expect(connections.token("acct", "gmail")).rejects.toThrow("gmail is not connected. Connect it in Apps.");
+    await expect(connections.token("acct", "gmail")).rejects.toThrow(
+      "gmail is not connected. Connect it in Apps.",
+    );
   });
 
   it("an unreadable saved token asks for a new connection", async () => {
