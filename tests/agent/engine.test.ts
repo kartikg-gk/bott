@@ -358,3 +358,34 @@ function nth<T>(items: T[], index: number): T {
   if (item === undefined) throw new Error(`no item at ${index}`);
   return item;
 }
+
+describe("beforeModelRequest", () => {
+  it("beforeModelRequest can replace history between turns", async () => {
+    const echo = tool("echo", true, async () => ({ content: [{ type: "text", text: "ok" }] }));
+    const provider = fakeProvider([
+      reply([call("c1", "echo", { n: 1 })]),
+      reply([{ type: "text", text: "done" }]),
+    ]);
+    const seen: number[] = [];
+    await collect(
+      runAgentLoop({
+        ...base,
+        provider,
+        messages: [user("old"), user("older")],
+        prompts: [user("go")],
+        tools: [echo],
+        beforeModelRequest: async (messages) => {
+          seen.push(messages.length);
+          return seen.length === 2 ? [user("summary"), ...messages.slice(-2)] : undefined;
+        },
+      }),
+    );
+    expect(seen).toEqual([3, 5]);
+    expect(provider.requests[0]?.messages).toHaveLength(3);
+    expect(provider.requests[1]?.messages.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+    ]);
+  });
+});

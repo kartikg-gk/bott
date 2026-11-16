@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, truncate } from "node:fs/promises";
 import { join } from "node:path";
 import type { TranscriptEntry } from "./transcript.ts";
 
@@ -16,6 +16,7 @@ export function jsonlSessionStore(dir: string): SessionStore {
   const file = (id: string) => join(dir, `${id}.jsonl`);
   const write = async (id: string, lines: Line[]) => {
     await mkdir(dir, { recursive: true });
+    await dropTornTail(file(id));
     await appendFile(file(id), lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
   };
   return {
@@ -68,4 +69,17 @@ export function memorySessionStore(seed: Record<string, TranscriptEntry[]> = {})
       data.set(id, [...entries]);
     },
   };
+}
+
+/** Cuts a torn final line (left by a crash mid-write) so the next append starts clean. */
+async function dropTornTail(path: string): Promise<void> {
+  let data: Buffer;
+  try {
+    data = await readFile(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  if (data.length === 0 || data[data.length - 1] === 0x0a) return;
+  await truncate(path, data.lastIndexOf(0x0a) + 1);
 }

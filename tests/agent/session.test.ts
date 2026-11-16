@@ -7,7 +7,12 @@ import type { StreamEvent } from "../../src/agent/providers/types.ts";
 import { AgentSession, type SessionEvent, type SessionOptions } from "../../src/agent/session.ts";
 import { jsonlSessionStore, memorySessionStore } from "../../src/agent/sessionStore.ts";
 import type { ToolSpec } from "../../src/agent/tools.ts";
-import { emptyUsage, type ModelEntry, type TranscriptEntry } from "../../src/agent/transcript.ts";
+import {
+  emptyUsage,
+  type ModelEntry,
+  type TranscriptEntry,
+  textOf,
+} from "../../src/agent/transcript.ts";
 import { type FakeProvider, fakeProvider } from "../support/fakeProvider.ts";
 
 function reply(blocks: ModelEntry["content"]): StreamEvent[] {
@@ -85,7 +90,10 @@ describe("AgentSession", () => {
       at = next;
     }
     const update = seen.find((e) => e.type === "message_update");
-    expect(update).toMatchObject({ delta: { type: "text_delta", text: "hello" } });
+    expect(update).toMatchObject({
+      delta: { type: "text_delta", text: "hello" },
+      assistantMessageEvent: { type: "text_delta", delta: "hello" },
+    });
     const ends = seen.filter((e) => e.type === "message_end");
     expect(ends.at(-1)).toMatchObject({ message: { role: "assistant" } });
     expect(seen.at(-1)).toMatchObject({ outcome: "completed", state: { isStreaming: false } });
@@ -135,6 +143,9 @@ describe("AgentSession", () => {
       kinds.push(e.type);
       if (e.type === "approval_requested") {
         expect(e.call).toMatchObject({ id: "c1", name: "Write" });
+        expect(e).toMatchObject({ approvalId: e.id, tool: "Write", preview: "{}" });
+        expect(e.digest).toMatch(/^[0-9a-f]{64}$/);
+        expect(e.expiresAt).toBeGreaterThan(Date.now() / 1000);
         expect(ran).toEqual([]);
         kinds.push("approve");
         await session.request("approve", { id: e.id, allow: true });
@@ -266,6 +277,49 @@ describe("AgentSession", () => {
     expect(end).toMatchObject({ error: expect.stringContaining("boom") });
     expect(seen.at(-1)).toMatchObject({ outcome: "completed" });
     expect(provider.requests[1]?.messages.length).toBe(9);
+  });
+
+  it("compacts partway through a long single turn", async () => {
+    const big: ToolSpec = {
+      name: "Read",
+      description: "read",
+      input: z.object({}),
+      readOnly: true,
+      async run() {
+        return { content: [text("y".repeat(2000))] };
+      },
+    };
+    const provider = fakeProvider([
+      reply([call("r1", "Read")]),
+      reply([call("r2", "Read")]),
+      reply([text("Read two files.")]),
+      reply([text("all done")]),
+    ]);
+    const session = await open("s10", provider, { tools: [big], contextWindow: 1000 });
+    await session.request("prompt", { message: "audit the repo exactly" });
+    const seen = await untilSettled(session);
+    expect(seen.filter((e) => e.type === "compaction_start")).toHaveLength(1);
+    const startAt = seen.findIndex((e) => e.type === "compaction_start");
+    const toolEnds = seen.filter((e, i) => i < startAt && e.type === "tool_execution_end");
+    expect(toolEnds).toHaveLength(2);
+    expect(provider.requests[2]?.tools).toEqual([]);
+    const head = JSON.stringify(provider.requests[3]?.messages[0]);
+    expect(head).toContain("Read two files.");
+    expect(head).toContain("audit the repo exactly");
+    expect(seen.at(-1)).toMatchObject({ outcome: "completed" });
+  });
+
+  it("appends cleanly after a torn final line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sessions-"));
+    writeFileSync(
+      join(dir, "t.jsonl"),
+      `${JSON.stringify({ entry: user("a") })}
+{"entry": {"ro`,
+    );
+    const store = jsonlSessionStore(dir);
+    await store.append("t", [user("b")]);
+    const loaded = await store.load("t");
+    expect(loaded.map((e) => textOf(e.content))).toEqual(["a", "b"]);
   });
 
   it("transcript persists and reloads from the jsonl store", async () => {

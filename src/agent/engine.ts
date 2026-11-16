@@ -25,6 +25,8 @@ export type AgentEvent =
       type: "message_update";
       message: ModelEntry;
       delta: { type: "text_delta" | "thinking_delta"; text: string };
+      /** The same change under the field names clients read. */
+      assistantMessageEvent: { type: "text_delta" | "thinking_delta"; delta: string };
     }
   | { type: "message_end"; message: TranscriptEntry }
   | { type: "tool_execution_start"; callId: string; name: string; input: unknown }
@@ -54,6 +56,8 @@ export interface AgentLoopOptions {
   /** Messages queued for when the agent would otherwise stop. */
   followUps?: () => TranscriptEntry[];
   beforeToolCall?: BeforeToolCall;
+  /** Called before every model request; a returned list replaces the working history. */
+  beforeModelRequest?: (messages: TranscriptEntry[]) => Promise<TranscriptEntry[] | undefined>;
   cacheKey?: string;
 }
 
@@ -80,6 +84,8 @@ export async function* runAgentLoop(opts: AgentLoopOptions): AsyncIterable<Agent
     pending = [];
 
     history = mendHistory(history).entries;
+    const replaced = await opts.beforeModelRequest?.([...history]);
+    if (replaced) history = [...replaced];
     const reply = yield* streamReply(opts, history);
     history.push(reply);
     added.push(reply);
@@ -146,7 +152,12 @@ async function* streamReply(
       cacheKey: opts.cacheKey,
     })) {
       if (event.type === "text_delta" || event.type === "thinking_delta") {
-        yield { type: "message_update", message: partial, delta: event };
+        yield {
+          type: "message_update",
+          message: partial,
+          delta: event,
+          assistantMessageEvent: { type: event.type, delta: event.text },
+        };
       } else if (event.type === "end") {
         final = event.entry;
       } else if (event.type === "error") {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 import { CompactionError, compact, estimate, needsCompaction, SUMMARY_PREFIX } from "./budget.ts";
 import { type AgentEvent, runAgentLoop, type ToolCall } from "./engine.ts";
@@ -41,7 +41,17 @@ type WithToolNames<E> = E extends { callId: string; name: string }
 
 export type SessionEvent =
   | WithToolNames<AgentEvent>
-  | { type: "approval_requested"; id: string; approvalId: string; call: ToolCall }
+  | {
+      type: "approval_requested";
+      id: string;
+      approvalId: string;
+      call: ToolCall;
+      tool: string;
+      preview: string;
+      digest: string;
+      /** Seconds since the epoch. */
+      expiresAt: number;
+    }
   | { type: "approval_resolved"; id: string; approvalId: string; allow: boolean }
   | {
       type: "host_tool_call";
@@ -77,6 +87,8 @@ export interface SessionOptions {
   store?: SessionStore;
   contextWindow?: number;
 }
+
+const APPROVAL_SECONDS = 600;
 
 const userEntry = (text: string): TranscriptEntry => ({
   role: "user",
@@ -263,6 +275,7 @@ export class AgentSession {
       });
       if (out.transcript !== this.transcript) {
         this.transcript = out.transcript;
+        await this.saving;
         await this.store.replace(this.opts.id, this.transcript);
       }
       this.emit({ type: "compaction_end", reason, summary: out.summary });
@@ -272,6 +285,23 @@ export class AgentSession {
       this.emit({ type: "compaction_end", reason, error: err.message });
       return err.message;
     }
+  }
+
+  /** Before each model request: compacts when the history is past the threshold. */
+  private async compactIfFull(
+    messages: TranscriptEntry[],
+    request: string,
+  ): Promise<TranscriptEntry[] | undefined> {
+    const window = this.opts.contextWindow ?? 128_000;
+    if (!needsCompaction(estimate(messages, this.tools, window))) return undefined;
+    this.transcript = messages;
+    // A failed summary is reported and the run continues uncompacted.
+    const error = await this.compactNow(
+      "threshold",
+      request,
+      this.controller ?? new AbortController(),
+    );
+    return error ? undefined : this.transcript;
   }
 
   private provider(): ModelProvider {
@@ -285,11 +315,6 @@ export class AgentSession {
     let outcome: Outcome = "completed";
     let error: string | undefined;
     try {
-      const window = this.opts.contextWindow ?? 128_000;
-      if (needsCompaction(estimate([...this.transcript, prompt], this.tools, window))) {
-        // A failed summary is reported and the run continues uncompacted.
-        await this.compactNow("threshold", text, this.controller ?? new AbortController());
-      }
       const ask = (call: ToolCall) => this.askApproval(call, signal);
       const readOnly = new Set(this.tools.filter((t) => t.readOnly).map((t) => t.name));
       let last: ModelEntry | undefined;
@@ -304,6 +329,7 @@ export class AgentSession {
         steering: () => this.steering.splice(0),
         followUps: () => this.followUps.splice(0),
         beforeToolCall: makeBeforeToolCall(this.opts.policy ?? "engine", ask, readOnly),
+        beforeModelRequest: (messages) => this.compactIfFull(messages, text),
         cacheKey: this.opts.id,
       })) {
         if (event.type === "message_end") {
@@ -353,7 +379,20 @@ export class AgentSession {
       };
       const onAbort = () => settle(false);
       this.approvals.set(id, settle);
-      this.emit({ type: "approval_requested", id, approvalId: id, call });
+      const input = JSON.stringify(call.input) ?? "";
+      this.emit({
+        type: "approval_requested",
+        id,
+        approvalId: id,
+        call,
+        tool: call.name,
+        preview: input.length > 1000 ? `${input.slice(0, 1000)}...` : input,
+        digest: createHash("sha256")
+          .update(`${call.name}
+${input}`)
+          .digest("hex"),
+        expiresAt: Math.floor(Date.now() / 1000) + APPROVAL_SECONDS,
+      });
       if (signal.aborted) settle(false);
       else signal.addEventListener("abort", onAbort);
     });
