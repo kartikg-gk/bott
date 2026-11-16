@@ -8,12 +8,14 @@ import { AccountStore, VALIDATION_LIMIT } from "../../src/accounts/store.ts";
 import { BotApps } from "../../src/apps/access.ts";
 import { AppConnections } from "../../src/apps/connections.ts";
 import { ensureSchema } from "../../src/db/schema.ts";
+import { Store } from "../../src/store/store.ts";
 import { AccountGateways } from "../../src/web/accounts.ts";
 import { createApp } from "../../src/web/app.ts";
 import { type AppsSeam, accountAppStores, connectedApps } from "../../src/web/apps.ts";
 import { fresh } from "../../src/web/router.ts";
 import { KEY } from "../support/accounts.ts";
 import { backends, database } from "../support/fakeD1.ts";
+import { fakeFetch, json } from "../support/fakeFetch.ts";
 import { gated } from "./support.ts";
 
 describe.each(backends)("%s backend", (kind) => {
@@ -52,6 +54,53 @@ describe.each(backends)("%s backend", (kind) => {
 
     for (let n = 0; n < VALIDATION_LIMIT; n++) expect(await attempts.attempt(account)).toBe(true);
     expect(await attempts.attempt(account)).toBe(false);
+  });
+
+  it("confirms a Telegram link in a process other than the one that issued the code", async () => {
+    const { db, store, account } = await accounts();
+    const bots = await Store.open(db, "main");
+    const token = `4321:${"t".repeat(35)}`;
+    const api = `https://api.telegram.org/bot${token}`;
+    const updates: { update_id: number }[] = [];
+    const offsets: number[] = [];
+    const fetcher = fakeFetch({
+      [`POST ${api}/getMe`]: () => json({ ok: true, result: { username: "bott_link_bot" } }),
+      [`POST ${api}/getUpdates`]: (req) => {
+        offsets.push(req.json.offset);
+        return json({ ok: true, result: updates.filter((u) => u.update_id >= req.json.offset) });
+      },
+    });
+    // Each instance stands for a separate process: nothing is shared but the database.
+    const elsewhere = () =>
+      new AppConnections({
+        ...accountAppStores(store),
+        storeFor: async () => bots,
+        origin: "https://bott.test",
+        fetch: fetcher,
+        env: { BOTT_TELEGRAM_APP_TOKEN: token },
+      });
+    const caller = { account, session: "s" };
+    const said = (chat: number, text: string, id: number) => ({
+      update_id: id,
+      message: { chat: { id: chat, type: "private" }, from: { id: chat }, text },
+    });
+
+    const { url } = await elsewhere().connect(caller, "telegram");
+    const code = new URL(url).searchParams.get("start") as string;
+    updates.push(said(800, "/start not-it", 10), said(700, `/start ${code}`, 11));
+    expect(await elsewhere().confirmTelegram(caller)).toEqual({ connected: true });
+    expect(await elsewhere().connected(account, "telegram")).toBe(true);
+    // The updates read were confirmed to Telegram, so the next reader starts after them.
+    expect(offsets.at(-1)).toBe(12);
+
+    // A later process that reads the same update again finds the code used up.
+    await elsewhere().disconnect(caller, "telegram");
+    const fresh = await elsewhere().connect(caller, "telegram");
+    expect(fresh.url).not.toBe(url);
+    expect(await elsewhere().confirmTelegram(caller)).toEqual({ connected: false });
+    const rows = await db.query("SELECT app FROM app_flows WHERE account=?", [account]);
+    expect(rows.map((row) => row.app)).toEqual(["telegram"]);
+    expect(JSON.stringify(rows)).not.toContain(code);
   });
 
   it("hands each account's gateway to the apps seam and adds its routes", async () => {

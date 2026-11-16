@@ -51,6 +51,9 @@ export interface AppFlows {
   ): Promise<void>;
   consume(account: string, app: string, session: string, state: string): Promise<string | null>;
   forget(account: string, app: string): Promise<void>;
+  holdCode(account: string, app: string, code: string): Promise<void>;
+  codeOwner(app: string, code: string): Promise<string | null>;
+  codeWaiting(account: string, app: string): Promise<boolean>;
 }
 
 /** How often one account may ask the server to check a key or start a link. */
@@ -77,6 +80,9 @@ export function accountAppStores(store: AccountStore): {
       forget: async (account, app) => {
         await store.db.run("DELETE FROM app_flows WHERE account=? AND app=?", [account, app]);
       },
+      holdCode: (account, app, code) => store.holdAppCode(account, app, code),
+      codeOwner: (app, code) => store.appCodeOwner(app, code),
+      codeWaiting: (account, app) => store.appCodeWaiting(account, app),
     },
     attempts: { attempt: (account) => store.validationAttempt(account) },
   };

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { AccountStore } from "../src/accounts/store.ts";
 import { AppConnections } from "../src/apps/connections.ts";
+import { MemoryFlows } from "../src/apps/credentials.ts";
 import { TelegramLinks } from "../src/apps/telegram.ts";
 import { profile } from "../src/bots/profiles.ts";
 import type { Database, Row } from "../src/db/database.ts";
@@ -409,11 +410,7 @@ describe.each(SOURCES)("a database file written before the switch, from schema %
           put: (a, kind, name, value) => accounts.putCredential(a, kind, name, value),
           delete: (a, kind, name) => accounts.deleteCredential(a, kind, name),
         },
-        flows: {
-          start: async () => {},
-          consume: async () => null,
-          forget: async () => {},
-        },
+        flows: new MemoryFlows(),
         storeFor: async () => opened.store,
         origin: "https://bott.example",
         telegram: new TelegramLinks(TELEGRAM),

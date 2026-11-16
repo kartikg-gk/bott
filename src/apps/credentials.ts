@@ -21,8 +21,32 @@ export interface FlowStore {
   ): Promise<void>;
   /** The flow's verifier, removing the flow; null when it is unknown, used or expired. */
   consume(account: string, app: string, session: string, state: string): Promise<string | null>;
-  /** Drops every started flow for the app. */
+  /** Drops every started flow for the app, a held link code among them. */
   forget(account: string, app: string): Promise<void>;
+  /** Keeps `code` as the account's one link code for the app, replacing any earlier one. */
+  holdCode(account: string, app: string, code: string): Promise<void>;
+  /** The account whose unexpired link code for the app this is, if any. */
+  codeOwner(app: string, code: string): Promise<string | null>;
+  /** Whether the account holds an unexpired link code for the app. */
+  codeWaiting(account: string, app: string): Promise<boolean>;
+}
+
+/** One-time link codes for an app, one per account, as `TelegramLinks` uses them. */
+export interface LinkCodes {
+  hold(account: string, code: string): Promise<void>;
+  owner(code: string): Promise<string | null>;
+  waiting(account: string): Promise<boolean>;
+  drop(account: string): Promise<void>;
+}
+
+/** The app's link codes, kept wherever the flows are kept. */
+export function linkCodes(flows: FlowStore, app: string): LinkCodes {
+  return {
+    hold: (account, code) => flows.holdCode(account, app, code),
+    owner: (code) => flows.codeOwner(app, code),
+    waiting: (account) => flows.codeWaiting(account, app),
+    drop: (account) => flows.forget(account, app),
+  };
 }
 
 /** Limits how often an account may ask the server to check a key or start a link. */
@@ -60,6 +84,7 @@ export class MemoryCredentials implements CredentialStore {
 /** Flows kept in memory, holding only digests of the session and state. */
 export class MemoryFlows implements FlowStore {
   private readonly flows = new Map<string, { state: string; verifier: string; expires: number }>();
+  private readonly codes = new Map<string, { code: string; expires: number }>();
 
   constructor(private readonly clock: () => number = wallClock) {}
 
@@ -90,6 +115,30 @@ export class MemoryFlows implements FlowStore {
       const [owner, name] = JSON.parse(key) as string[];
       if (owner === account && name === app) this.flows.delete(key);
     }
+    this.codes.delete(JSON.stringify([account, app]));
+  }
+
+  async holdCode(account: string, app: string, code: string) {
+    const now = this.clock();
+    for (const [key, held] of this.codes) if (held.expires <= now) this.codes.delete(key);
+    this.codes.set(JSON.stringify([account, app]), {
+      code: digest(code),
+      expires: now + FLOW_SECONDS,
+    });
+  }
+
+  async codeOwner(app: string, code: string) {
+    const now = this.clock();
+    for (const [key, held] of this.codes) {
+      const [owner, name] = JSON.parse(key) as string[];
+      if (name === app && held.code === digest(code) && held.expires > now) return owner ?? null;
+    }
+    return null;
+  }
+
+  async codeWaiting(account: string, app: string) {
+    const held = this.codes.get(JSON.stringify([account, app]));
+    return held !== undefined && held.expires > this.clock();
   }
 }
 

@@ -1,13 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { App } from "./app.ts";
+import { type LinkCodes, linkCodes, MemoryFlows } from "./credentials.ts";
 import { AppError, type Fetch, jsonOutput } from "./http.ts";
 import { tool } from "./schema.ts";
 
 export const TELEGRAM_APP_TOKEN = "BOTT_TELEGRAM_APP_TOKEN";
 /** Where the server's main Telegram bot keeps its token; linking must use a different bot. */
 export const TELEGRAM_MAIN_TOKEN = "TELEGRAM_BOT_TOKEN";
-const CODE_SECONDS = 600;
 const MAX_TEXT = 3800;
 const START = "/start ";
 
@@ -38,50 +38,33 @@ export function startRequest(update: Item): { chat: number; code: string } | nul
   return { chat: chat.id, code: text.slice(START.length) };
 }
 
-/** One-time link codes, one per account, each good for ten minutes. */
-class LinkCodes {
-  private readonly byAccount = new Map<string, { code: string; expires: number }>();
+/** Most rounds of updates one confirmation reads before it stops. */
+const UPDATE_ROUNDS = 5;
 
-  issue(account: string, now: number): string {
-    for (const [owner, entry] of this.byAccount) {
-      if (entry.expires <= now) this.byAccount.delete(owner);
-    }
-    const code = randomBytes(24).toString("base64url");
-    this.byAccount.set(account, { code, expires: now + CODE_SECONDS });
-    return code;
-  }
-
-  waiting(account: string, now: number): boolean {
-    const entry = this.byAccount.get(account);
-    return entry !== undefined && entry.expires > now;
-  }
-
-  /** The account a live code belongs to. */
-  owner(code: string, now: number): string | undefined {
-    for (const [account, entry] of this.byAccount) {
-      if (entry.code === code && entry.expires > now) return account;
-    }
-    return undefined;
-  }
-
-  drop(account: string): void {
-    this.byAccount.delete(account);
-  }
-}
-
-/** Links an account to a private chat with the app bot, and sends to that chat. */
+/**
+ * Links an account to a private chat with the app bot, and sends to that chat.
+ *
+ * Codes live in `codes`, which the server keeps in the database, so any process can confirm a
+ * link another process started. Telegram itself remembers which updates were read: each read
+ * passes the next update number, which tells Telegram to drop everything before it. A process
+ * that starts fresh may see the last few updates again; their codes are used up by then, so
+ * nothing links twice.
+ */
 export class TelegramLinks {
   readonly botId: number | null;
   private readonly token: string | null;
-  private readonly codes = new LinkCodes();
+  private readonly codes: LinkCodes;
+  /** The next update this process expects; Telegram's own record decides what comes back. */
   private nextUpdate = 0;
   private reading: Promise<void> = Promise.resolve();
 
   constructor(
     token: string,
     private readonly fetcher: Fetch = fetch,
-    private readonly clock: () => number = () => Date.now() / 1000,
+    clock: () => number = () => Date.now() / 1000,
+    codes?: LinkCodes,
   ) {
+    this.codes = codes ?? linkCodes(new MemoryFlows(clock), "telegram");
     const shaped = /^\d+:[A-Za-z0-9_-]{30,}$/.test(token);
     this.token = shaped ? token : null;
     this.botId = shaped ? Number.parseInt(token, 10) : null;
@@ -109,8 +92,8 @@ export class TelegramLinks {
     return reply.result;
   }
 
-  forget(account: string): void {
-    this.codes.drop(account);
+  forget(account: string): Promise<void> {
+    return this.codes.drop(account);
   }
 
   /** A link that opens the app bot with a one-time code for this account. */
@@ -120,7 +103,9 @@ export class TelegramLinks {
     if (typeof handle !== "string" || !/^[A-Za-z0-9_]{5,32}$/.test(handle)) {
       throw new TelegramError("The link bot's username is missing or malformed");
     }
-    return `https://t.me/${handle}?start=${this.codes.issue(account, this.clock())}`;
+    const code = randomBytes(24).toString("base64url");
+    await this.codes.hold(account, code);
+    return `https://t.me/${handle}?start=${code}`;
   }
 
   /**
@@ -134,26 +119,33 @@ export class TelegramLinks {
   }
 
   private async drain(account: string, save: (owner: string, chat: number) => Promise<void>) {
-    if (!this.codes.waiting(account, this.clock())) {
-      this.codes.drop(account);
+    if (!(await this.codes.waiting(account))) {
+      await this.codes.drop(account);
       return;
     }
-    const batch = await this.api("getUpdates", {
-      offset: this.nextUpdate,
-      timeout: 0,
-      limit: 100,
-      allowed_updates: ["message"],
-    });
-    for (const update of Array.isArray(batch) ? (batch as Item[]) : []) {
-      const id = update?.update_id;
-      if (!Number.isInteger(id) || id < this.nextUpdate) continue;
-      const request = startRequest(update);
-      const owner = request && this.codes.owner(request.code, this.clock());
-      if (request && owner !== undefined && owner !== null) {
-        await save(owner, request.chat);
-        this.codes.drop(owner);
+    // Reading on until a round comes back empty tells Telegram every update seen here is done.
+    for (let round = 0; round < UPDATE_ROUNDS; round++) {
+      const batch = await this.api("getUpdates", {
+        offset: this.nextUpdate,
+        timeout: 0,
+        limit: 100,
+        allowed_updates: ["message"],
+      });
+      const updates = Array.isArray(batch) ? (batch as Item[]) : [];
+      let moved = false;
+      for (const update of updates) {
+        const id = update?.update_id;
+        if (!Number.isInteger(id) || id < this.nextUpdate) continue;
+        const request = startRequest(update);
+        const owner = request && (await this.codes.owner(request.code));
+        if (request && owner) {
+          await save(owner, request.chat);
+          await this.codes.drop(owner);
+        }
+        this.nextUpdate = id + 1;
+        moved = true;
       }
-      this.nextUpdate = id + 1;
+      if (!moved) return;
     }
   }
 

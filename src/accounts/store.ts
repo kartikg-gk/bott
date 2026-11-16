@@ -34,6 +34,12 @@ const TABLES = [
   "CREATE INDEX IF NOT EXISTS attempts_account ON attempts(account,attempted)",
 ];
 
+/**
+ * The session slot a link code takes in app_flows. Codes are not tied to a browser session, and
+ * no real session digests to this, so a code can never finish an authorization.
+ */
+const CODE_SLOT = digest("link-code");
+
 export interface Account {
   id: string;
   subject: string;
@@ -195,6 +201,41 @@ export class AccountStore {
       [account, app, digest(session), digest(state), this.clock()],
     );
     return row ? String(row.verifier) : null;
+  }
+
+  /**
+   * Keeps a one-time link code in app_flows, so whichever process reads the reply can find whose
+   * it is. Only its digest is stored, in the session slot kept for codes.
+   */
+  async holdAppCode(account: string, app: string, code: string): Promise<void> {
+    const now = this.clock();
+    await this.db.run("DELETE FROM app_flows WHERE expires<=?", [now]);
+    await this.db.run("INSERT OR REPLACE INTO app_flows VALUES(?,?,?,?,?,?)", [
+      account,
+      app,
+      CODE_SLOT,
+      digest(code),
+      "",
+      now + FLOW_SECONDS,
+    ]);
+  }
+
+  /** The account holding this unexpired link code for the app. */
+  async appCodeOwner(app: string, code: string): Promise<string | null> {
+    const row = await this.one(
+      "SELECT account FROM app_flows WHERE app=? AND session=? AND state=? AND expires>?",
+      [app, CODE_SLOT, digest(code), this.clock()],
+    );
+    return row ? String(row.account) : null;
+  }
+
+  /** Whether the account holds an unexpired link code for the app. */
+  async appCodeWaiting(account: string, app: string): Promise<boolean> {
+    const row = await this.one(
+      "SELECT 1 AS held FROM app_flows WHERE account=? AND app=? AND session=? AND expires>?",
+      [account, app, CODE_SLOT, this.clock()],
+    );
+    return row !== null;
   }
 
   async deleteCredential(account: string, kind: string, name: string): Promise<void> {

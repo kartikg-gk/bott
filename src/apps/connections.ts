@@ -3,7 +3,7 @@ import type { Store } from "../store/store.ts";
 import type { Env } from "./app.ts";
 import { blandCall, checkBlandKey } from "./bland.ts";
 import type { AttemptLimit, CredentialStore, FlowStore } from "./credentials.ts";
-import { MemoryAttempts } from "./credentials.ts";
+import { linkCodes, MemoryAttempts } from "./credentials.ts";
 import { checkGranolaKey, granolaKeyValid } from "./granola.ts";
 import { AppError, type Fetch, HttpError, NetworkError } from "./http.ts";
 import {
@@ -175,7 +175,12 @@ export class AppConnections {
     this.attempts = opts.attempts ?? new MemoryAttempts(this.clock);
     const linker =
       opts.telegram ??
-      new TelegramLinks(this.env[TELEGRAM_APP_TOKEN] ?? "", this.fetch, this.clock);
+      new TelegramLinks(
+        this.env[TELEGRAM_APP_TOKEN] ?? "",
+        this.fetch,
+        this.clock,
+        linkCodes(opts.flows, "telegram"),
+      );
     const main = new TelegramLinks(opts.mainTelegramToken ?? this.env[TELEGRAM_MAIN_TOKEN] ?? "");
     if (linker.botId !== null && linker.botId === main.botId) {
       this.telegramError =
@@ -357,7 +362,7 @@ export class AppConnections {
     let revoked = false;
     await this.serial(caller.account, name, async () => {
       await this.requireSignedIn(caller, "Your session ended. Sign in, then disconnect the app.");
-      if (name === "telegram") this.telegram.forget(caller.account);
+      if (name === "telegram") await this.telegram.forget(caller.account);
       await this.clearGrants(caller.account, name);
       try {
         const saved = await this.readSaved(caller.account, name);
