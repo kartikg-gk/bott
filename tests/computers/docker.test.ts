@@ -46,13 +46,14 @@ const RO_MOUNT = JSON.stringify([
   { Destination: MEMORY_MOUNT, RW: false },
 ]);
 
-function computer(cli: DockerCli) {
+function computer(cli: DockerCli, network: "open" | "closed" = "closed") {
   return dockerComputer({
     name: "bott-bot-main-abc",
     image: "debian:bookworm-slim",
     memory: "2g",
     hostRoot: join(base, "work"),
     memoryDir: join(base, "memory"),
+    network,
     cli,
   });
 }
@@ -128,23 +129,35 @@ describe("docker computer", () => {
     ]);
   });
 
-  it("creates containers without network access", async () => {
-    const { cli, calls } = fakeDocker({
-      "inspect {{.State.Running}}": () => fail("Error: No such object"),
-    });
-    await computer(cli).run("x", opts());
-    expect((calls.find((c) => c[0] === "run") as string[]).join(" ")).toContain("--network none");
+  it("creates containers with the network open unless it is closed", async () => {
+    for (const [network, flag] of [
+      ["open", false],
+      ["closed", true],
+    ] as const) {
+      const { cli, calls } = fakeDocker({
+        "inspect {{.State.Running}}": () => fail("Error: No such object"),
+      });
+      await computer(cli, network).run("x", opts());
+      const create = (calls.find((c) => c[0] === "run") as string[]).join(" ");
+      expect(create.includes("--network none")).toBe(flag);
+    }
   });
 
-  it("refuses an earlier container that can reach the network", async () => {
-    const { cli, calls } = fakeDocker({
-      "inspect {{.State.Running}}": () => ok("true\n"),
-      "inspect {{.HostConfig.NetworkMode}}": () => ok("bridge\n"),
-    });
-    await expect(computer(cli).run("x", opts())).rejects.toThrow(
-      "Container bott-bot-main-abc needs to be recreated without network access",
-    );
-    expect(calls.some((c) => c[0] === "exec")).toBe(false);
+  it("refuses a container whose network does not match the setting", async () => {
+    for (const [network, mode] of [
+      ["closed", "bridge"],
+      ["open", "none"],
+    ] as const) {
+      const { cli, calls } = fakeDocker({
+        "inspect {{.State.Running}}": () => ok("true\n"),
+        "inspect {{.HostConfig.NetworkMode}}": () => ok(`${mode}\n`),
+        "inspect {{json .Mounts}}": () => ok(RO_MOUNT),
+      });
+      await expect(computer(cli, network).run("x", opts())).rejects.toThrow(
+        `Container bott-bot-main-abc needs to be recreated to use the ${network} network setting`,
+      );
+      expect(calls.some((c) => c[0] === "exec")).toBe(false);
+    }
   });
 
   it("refuses a container whose notes are writable", async () => {

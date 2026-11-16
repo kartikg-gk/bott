@@ -27,6 +27,7 @@ export const makeComputer: ComputerFactory = (settings, place) => {
         memory: settings.dockerMemory,
         hostRoot: place.hostRoot,
         memoryDir: place.memoryDir,
+        network: settings.sandboxNetwork,
       });
     case "daytona":
       return daytonaComputer({
@@ -36,6 +37,7 @@ export const makeComputer: ComputerFactory = (settings, place) => {
         snapshot: settings.daytonaSnapshot,
         target: settings.daytonaTarget,
         archiveMinutes: settings.daytonaArchiveMinutes,
+        network: settings.sandboxNetwork,
       });
     default:
       return { ...localWorkspace(place.hostRoot), memoryPath: place.memoryDir };

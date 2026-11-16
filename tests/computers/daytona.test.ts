@@ -33,7 +33,7 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
-function computer(overrides: { apiKey?: string } = {}) {
+function computer(overrides: { apiKey?: string; network?: "open" | "closed" } = {}) {
   const ws = daytonaComputer({
     name: "bott-bot-main-abc",
     instance: "main",
@@ -41,6 +41,7 @@ function computer(overrides: { apiKey?: string } = {}) {
     snapshot: "bott-snapshot",
     target: "us",
     archiveMinutes: 60,
+    network: "open",
     apiKey: "test-key",
     apiUrl: fake.url,
     ...overrides,
@@ -71,7 +72,7 @@ describe("daytona computer", () => {
     }
   });
 
-  it("creates a closed sandbox on first use, copies the notes up and runs there", async () => {
+  it("creates a sandbox on first use, copies the notes up and runs there", async () => {
     const commands: { command: string; cwd: string | undefined }[] = [];
     fake.executor = (command, cwd) => {
       commands.push({ command, cwd });
@@ -90,7 +91,7 @@ describe("daytona computer", () => {
     const sandbox = fake.sandboxes.get("bott-bot-main-abc");
     expect(sandbox).toMatchObject({
       snapshot: "bott-snapshot",
-      networkBlockAll: true,
+      networkBlockAll: false,
       autoStopInterval: IDLE_MINUTES,
       autoArchiveInterval: 60,
     });
@@ -102,9 +103,20 @@ describe("daytona computer", () => {
     expect(files?.has(`${SANDBOX_MEMORY}/notes.txt`)).toBe(false);
   });
 
+  it("makes a closed sandbox when the network setting is closed", async () => {
+    await computer({ network: "closed" }).run("true", opts());
+    expect(fake.sandboxes.get("bott-bot-main-abc")?.networkBlockAll).toBe(true);
+  });
+
+  it("opens the network of an existing sandbox when the setting is open", async () => {
+    fake.add({ name: "bott-bot-main-abc", state: "started", networkBlockAll: true });
+    await computer().run("true", opts());
+    expect(fake.sandboxes.get("bott-bot-main-abc")?.networkBlockAll).toBe(false);
+  });
+
   it("starts an existing sandbox instead of making another, and closes its network", async () => {
     fake.add({ name: "bott-bot-main-abc", state: "stopped", networkBlockAll: false });
-    await computer().run("true", opts());
+    await computer({ network: "closed" }).run("true", opts());
     expect(fake.calls()).not.toContain("POST /sandbox");
     expect(fake.calls()).toContain("POST /sandbox/sb-1/start");
     expect(fake.sandboxes.get("bott-bot-main-abc")).toMatchObject({

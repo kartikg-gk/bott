@@ -60,6 +60,8 @@ export interface DockerOptions {
   hostRoot: string;
   /** The bot's memory notes on this machine. */
   memoryDir: string;
+  /** Whether the container may reach the network. */
+  network: "open" | "closed";
   cli?: DockerCli;
 }
 
@@ -75,7 +77,7 @@ function bind(source: string, target: string, readOnly: boolean): string {
 
 /**
  * A long-lived container per bot, created or started on first use. Stopping keeps its files.
- * Commands see none of the gateway's environment, and the container has no network.
+ * Commands see none of the gateway's environment. The network is open unless it is closed.
  */
 export function dockerComputer(opts: DockerOptions): Workspace {
   const cli = opts.cli ?? dockerCli;
@@ -83,14 +85,15 @@ export function dockerComputer(opts: DockerOptions): Workspace {
   /** Set once a start was tried, so stopping knows there may be something to stop. */
   let touched = false;
 
-  /** A container made before the network rule may still reach out; it must be recreated. */
+  /** A container's network is fixed when it is made, so one made otherwise must be recreated. */
   async function verifyNetwork(): Promise<void> {
     const found = await cli(["inspect", "--format", "{{.HostConfig.NetworkMode}}", opts.name]);
     if (found.code !== 0)
       throw new ComputerError("The container network setting could not be checked");
-    if (found.stdout.toString("utf8").trim() !== "none") {
+    const closed = found.stdout.toString("utf8").trim() === "none";
+    if (closed !== (opts.network === "closed")) {
       throw new ComputerError(
-        `Container ${opts.name} needs to be recreated without network access`,
+        `Container ${opts.name} needs to be recreated to use the ${opts.network} network setting`,
       );
     }
   }
@@ -134,8 +137,7 @@ export function dockerComputer(opts: DockerOptions): Workspace {
           "-d",
           "--name",
           opts.name,
-          "--network",
-          "none",
+          ...(opts.network === "closed" ? ["--network", "none"] : []),
           "--cap-drop",
           "ALL",
           "--security-opt",

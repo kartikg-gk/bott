@@ -8,6 +8,8 @@ const schema = z
     daytonaTarget: z.string().min(1).nullable().default(null),
     daytonaSnapshot: z.string().min(1).nullable().default(null),
     daytonaArchiveMinutes: z.number().int().min(1).default(60),
+    /** Containers and sandboxes reach the network unless this is closed. */
+    sandboxNetwork: z.enum(["open", "closed"]).default("open"),
   })
   .refine((s) => s.executor !== "docker" || s.dockerImage !== null, {
     message: "Running bots in Docker needs an image name",

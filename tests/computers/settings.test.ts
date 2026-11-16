@@ -13,6 +13,7 @@ describe("computer settings", () => {
       daytonaTarget: null,
       daytonaSnapshot: null,
       daytonaArchiveMinutes: 60,
+      sandboxNetwork: "open",
     });
   });
 
@@ -34,6 +35,8 @@ describe("computer settings", () => {
     );
     expect(() => computerSettings({ executor: "vm" })).toThrow();
     expect(() => computerSettings({ daytonaArchiveMinutes: 0 })).toThrow();
+    expect(() => computerSettings({ sandboxNetwork: "none" })).toThrow();
+    expect(computerSettings({ sandboxNetwork: "closed" }).sandboxNetwork).toBe("closed");
   });
 
   it("name each bot's computer from the instance and bot", () => {

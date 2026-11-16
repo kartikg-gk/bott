@@ -44,6 +44,7 @@ describe.skipIf(!ready)("a real docker computer", () => {
       name,
       image: IMAGE,
       memory: "512m",
+      network: "closed",
       hostRoot: join(base, "work"),
       memoryDir: join(base, "memory"),
     });
@@ -64,6 +65,9 @@ describe.skipIf(!ready)("a real docker computer", () => {
   it("drops every capability and sees the notes read-only", async () => {
     const caps = await ws.run("grep CapEff /proc/self/status", opts());
     expect(caps.stdout).toMatch(/CapEff:\s+0+\s*$/);
+    // A closed container has only its loopback device.
+    const devices = await ws.run("ls /sys/class/net", opts());
+    expect(devices.stdout.trim()).toBe("lo");
     const notes = await ws.run("cat /bot/memory/KNOWLEDGE.md", opts());
     expect(notes.stdout).toContain("fact");
     const write = await ws.run("echo x > /bot/memory/KNOWLEDGE.md", opts());

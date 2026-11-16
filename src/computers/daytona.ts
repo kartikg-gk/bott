@@ -26,6 +26,8 @@ export interface DaytonaOptions {
   snapshot: string | null;
   target: string | null;
   archiveMinutes: number;
+  /** Whether the sandbox may reach the network. */
+  network: "open" | "closed";
   /** Defaults to DAYTONA_API_KEY. */
   apiKey?: string;
   /** Defaults to the service's own address, or DAYTONA_API_URL. */
@@ -86,15 +88,18 @@ export function daytonaComputer(opts: DaytonaOptions): Workspace {
     let box: Sandbox;
     try {
       box = await daytona.get(opts.name);
-      // Sandboxes are kept off the network; one made before that rule is closed off now.
-      if (box.networkBlockAll === false) await box.updateNetworkSettings({ networkBlockAll: true });
+      // A sandbox's network can change in place, so it follows the setting.
+      const blocked = opts.network === "closed";
+      if (box.networkBlockAll !== undefined && box.networkBlockAll !== blocked) {
+        await box.updateNetworkSettings({ networkBlockAll: blocked });
+      }
       if (!started(box)) await box.start();
     } catch (err) {
       if (!(err instanceof api.DaytonaNotFoundError)) throw err;
       box = await daytona.create({
         name: opts.name,
         ...(opts.snapshot ? { snapshot: opts.snapshot } : {}),
-        networkBlockAll: true,
+        networkBlockAll: opts.network === "closed",
         autoStopInterval: IDLE_MINUTES,
         autoArchiveInterval: opts.archiveMinutes,
         labels: { bott: opts.instance },
