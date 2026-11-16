@@ -5,8 +5,8 @@ import { AppError, type Fetch, jsonOutput } from "./http.ts";
 import { tool } from "./schema.ts";
 
 export const TELEGRAM_APP_TOKEN = "BOTT_TELEGRAM_APP_TOKEN";
-/** The token of the server's main Telegram bot, which linking must never share. */
-export const TELEGRAM_MAIN_TOKEN = "BOTT_TELEGRAM_TOKEN";
+/** Where the server's main Telegram bot keeps its token; linking must use a different bot. */
+export const TELEGRAM_MAIN_TOKEN = "TELEGRAM_BOT_TOKEN";
 const LINK_SECONDS = 600;
 
 /** Telegram could not be reached or refused the call. */

@@ -4,7 +4,7 @@ import { AppConnections } from "../../src/apps/connections.ts";
 import { MemoryAttempts, MemoryCredentials, MemoryFlows } from "../../src/apps/credentials.ts";
 import { UNTRUSTED } from "../../src/apps/http.ts";
 import { APPS, AppRunner } from "../../src/apps/registry.ts";
-import { telegram } from "../../src/apps/telegram.ts";
+import { TelegramLinks, telegram } from "../../src/apps/telegram.ts";
 import { Store } from "../../src/store/store.ts";
 import { database } from "../support/fakeD1.ts";
 import { fakeFetch, json, type Seen } from "../support/fakeFetch.ts";
@@ -46,7 +46,10 @@ const start = (id: number, chat: number, text: string, extra: object = {}) => ({
   message: { chat: { id: chat, type: "private" }, from: { id: chat }, text, ...extra },
 });
 
-async function setup(env: Record<string, string> = { BOTT_TELEGRAM_APP_TOKEN: TOKEN }) {
+async function setup(
+  env: Record<string, string> = { BOTT_TELEGRAM_APP_TOKEN: TOKEN },
+  extra: Partial<ConstructorParameters<typeof AppConnections>[0]> = {},
+) {
   const { db } = database("sqlite");
   const store = await Store.open(db, "main");
   const bot = await store.createBot({ name: "Writer", role: "Drafts" });
@@ -60,27 +63,57 @@ async function setup(env: Record<string, string> = { BOTT_TELEGRAM_APP_TOKEN: TO
     origin: "https://bott.test",
     fetch: server.fetcher,
     env,
+    ...extra,
   });
   return { db, store, bot, server, credentials, connections };
 }
 
 describe("telegram", () => {
-  it("refuses an app token that is the main bot's token", async () => {
-    const { db, connections } = await setup({
-      BOTT_TELEGRAM_APP_TOKEN: TOKEN,
-      BOTT_TELEGRAM_TOKEN: TOKEN,
-    });
+  async function expectRefused(connections: AppConnections) {
     expect(connections.configured("telegram")).toBe(false);
     await expect(
       connections.connect({ account: "a", session: "s" }, "telegram"),
-    ).rejects.toMatchObject({
-      status: 409,
-      message: expect.stringContaining("matches the main Telegram bot token"),
-    });
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining("main Telegram bot") });
     const listed = (await connections.list({ account: "a", session: "s" })).find(
       (a) => a.id === "telegram",
     );
     expect(listed).toMatchObject({ configured: false, configurationError: expect.any(String) });
+  }
+
+  it("refuses an app token equal to the main bot token in the environment", async () => {
+    const { db, connections } = await setup({
+      BOTT_TELEGRAM_APP_TOKEN: TOKEN,
+      TELEGRAM_BOT_TOKEN: TOKEN,
+    });
+    await expectRefused(connections);
+    await db.close();
+  });
+
+  it("refuses an app token for the same bot as the configured main token", async () => {
+    const { db, connections } = await setup(
+      { BOTT_TELEGRAM_APP_TOKEN: TOKEN },
+      { mainTelegramToken: `12345:${"b".repeat(35)}` },
+    );
+    await expectRefused(connections);
+    await db.close();
+  });
+
+  it("refuses an injected link bot that is the main bot", async () => {
+    const server = telegramServer();
+    const { db, connections } = await setup(
+      {},
+      { mainTelegramToken: TOKEN, telegram: new TelegramLinks(TOKEN, server.fetcher) },
+    );
+    await expectRefused(connections);
+    await db.close();
+  });
+
+  it("accepts a link bot that differs from the main bot", async () => {
+    const { db, connections } = await setup(
+      { BOTT_TELEGRAM_APP_TOKEN: TOKEN },
+      { mainTelegramToken: `999:${"c".repeat(35)}` },
+    );
+    expect(connections.configured("telegram")).toBe(true);
     await db.close();
   });
 

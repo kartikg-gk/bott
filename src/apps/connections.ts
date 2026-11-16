@@ -153,6 +153,8 @@ export interface ConnectionsOptions {
   attempts?: AttemptLimit;
   /** Links accounts to a private Telegram chat; built from the environment when left out. */
   telegram?: TelegramLinks;
+  /** The server's own Telegram bot token. Falls back to TELEGRAM_BOT_TOKEN in the environment. */
+  mainTelegramToken?: string;
   fetch?: Fetch;
   env?: Env;
   /** Seconds since the epoch, as a float. */
@@ -178,17 +180,17 @@ export class AppConnections {
     this.env = opts.env ?? process.env;
     this.clock = opts.clock ?? (() => Date.now() / 1000);
     this.attempts = opts.attempts ?? new MemoryAttempts(this.clock);
-    let token = this.env[TELEGRAM_APP_TOKEN] ?? "";
-    if (token && token === this.env[TELEGRAM_MAIN_TOKEN]) {
+    const linker =
+      opts.telegram ??
+      new TelegramLinks(this.env[TELEGRAM_APP_TOKEN] ?? "", this.fetch, this.clock);
+    const main = new TelegramLinks(opts.mainTelegramToken ?? this.env[TELEGRAM_MAIN_TOKEN] ?? "");
+    if (linker.botId !== null && linker.botId === main.botId) {
       this.telegramError =
-        `${TELEGRAM_APP_TOKEN} matches the main Telegram bot token. ` +
-        "Link Telegram with a different bot from the one the server uses.";
-      token = "";
+        "The Telegram link bot is the server's main Telegram bot. Give linking a bot of its own.";
+      this.telegram = new TelegramLinks("", this.fetch, this.clock);
+    } else {
+      this.telegram = linker;
     }
-    this.telegram =
-      opts.telegram && !this.telegramError
-        ? opts.telegram
-        : new TelegramLinks(token, this.fetch, this.clock);
   }
 
   /** The apps an account can connect, in the order people see them. */
