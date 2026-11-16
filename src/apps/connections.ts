@@ -8,6 +8,7 @@ import { checkGranolaKey, granolaKeyValid } from "./granola.ts";
 import { AppError, basic, type Fetch, HttpError } from "./http.ts";
 import { NOTION_VERSION } from "./notion.ts";
 import { AppRunner } from "./registry.ts";
+import { TELEGRAM_APP_TOKEN, TELEGRAM_MAIN_TOKEN, TelegramLinks } from "./telegram.ts";
 import { TODOIST_MCP_URL, TODOIST_SCOPE } from "./todoist.ts";
 import {
   registerWisprClient,
@@ -150,6 +151,8 @@ export interface ConnectionsOptions {
   /** Where the browser reaches this server, for OAuth callbacks. */
   origin: string;
   attempts?: AttemptLimit;
+  /** Links accounts to a private Telegram chat; built from the environment when left out. */
+  telegram?: TelegramLinks;
   fetch?: Fetch;
   env?: Env;
   /** Seconds since the epoch, as a float. */
@@ -166,26 +169,42 @@ export class AppConnections {
   readonly clock: () => number;
   readonly attempts: AttemptLimit;
   private readonly locks = new Map<string, Promise<void>>();
+  readonly telegram: TelegramLinks;
+  /** Why Telegram linking is off, when its settings are unsafe. */
+  readonly telegramError: string | undefined;
 
   constructor(readonly opts: ConnectionsOptions) {
     this.fetch = opts.fetch ?? fetch;
     this.env = opts.env ?? process.env;
     this.clock = opts.clock ?? (() => Date.now() / 1000);
     this.attempts = opts.attempts ?? new MemoryAttempts(this.clock);
+    let token = this.env[TELEGRAM_APP_TOKEN] ?? "";
+    if (token && token === this.env[TELEGRAM_MAIN_TOKEN]) {
+      this.telegramError =
+        `${TELEGRAM_APP_TOKEN} matches the main Telegram bot token. ` +
+        "Link Telegram with a different bot from the one the server uses.";
+      token = "";
+    }
+    this.telegram =
+      opts.telegram && !this.telegramError
+        ? opts.telegram
+        : new TelegramLinks(token, this.fetch, this.clock);
   }
 
   /** The apps an account can connect, in the order people see them. */
   get names(): string[] {
-    return [...Object.keys(OAUTH_APPS), ...Object.keys(KEY_APPS)];
+    return [...Object.keys(OAUTH_APPS), ...Object.keys(KEY_APPS), "telegram"];
   }
 
   configured(name: string): boolean {
+    if (name === "telegram") return this.telegram.ready;
     if (name in KEY_APPS || name === "wispr") return true;
     const app = OAUTH_APPS[name];
     return !!app && !!this.env[app.clientId] && !!this.env[app.secret];
   }
 
   async connected(account: string, name: string): Promise<boolean> {
+    if (name === "telegram") return (await this.linkedChat(account)) !== null;
     if (!this.names.includes(name) || !this.configured(name)) return false;
     try {
       return (await this.opts.credentials.get(account, "app", name)) !== null;
@@ -415,6 +434,36 @@ export class AppConnections {
     });
   }
 
+  /** The account's linked private chat with the current app bot, if any. */
+  async linkedChat(account: string): Promise<number | null> {
+    if (this.telegram.botId === null) return null;
+    let saved: { chat_id?: unknown; bot_id?: unknown } | null;
+    try {
+      saved = await this.credential(account, "telegram");
+    } catch {
+      return null;
+    }
+    if (!saved || saved.bot_id !== this.telegram.botId) return null;
+    const chat = saved.chat_id;
+    return typeof chat === "number" && Number.isInteger(chat) && chat > 0 ? chat : null;
+  }
+
+  /** Links the account's chat once its code reached the app bot. */
+  async confirmTelegram(caller: Caller): Promise<{ connected: boolean }> {
+    if (!this.configured("telegram")) {
+      throw new ConnectionError(409, this.telegramError ?? "Configure the server Telegram app bot");
+    }
+    try {
+      await this.telegram.confirm(caller.account, async (owner, chat) => {
+        await this.clearGrants(owner, "telegram");
+        await this.save(owner, "telegram", { chat_id: chat, bot_id: this.telegram.botId });
+      });
+    } catch {
+      throw new ConnectionError(502, "Ask to confirm the Telegram link once more");
+    }
+    return { connected: await this.connected(caller.account, "telegram") };
+  }
+
   /** A runner whose apps use this account's connections. */
   runner(account: string, opts: { fetch?: Fetch } = {}): AppRunner {
     return new AppRunner({
@@ -423,6 +472,14 @@ export class AppConnections {
       accessToken: (name) => this.token(account, name),
       recoverToken: (name, rejected) => this.token(account, name, rejected),
       available: (name) => this.connected(account, name),
+      services: {
+        telegramSend: (text) =>
+          this.locked(account, "telegram", async () => {
+            const chat = await this.linkedChat(account);
+            if (chat === null) throw new AppError("Link a private Telegram chat from Apps first");
+            return this.telegram.send(chat, text);
+          }),
+      },
     });
   }
 
@@ -465,15 +522,36 @@ export class AppConnections {
         connected: await this.connected(caller.account, name),
         saved,
         keyAuth: name in KEY_APPS,
+        ...(name === "telegram" && this.telegramError
+          ? { configurationError: this.telegramError }
+          : {}),
         bots: enabled,
       });
     }
     return out;
   }
 
+  private async linkTelegram(caller: Caller): Promise<{ url: string }> {
+    if (!this.configured("telegram")) {
+      throw new ConnectionError(409, this.telegramError ?? "Configure the server Telegram app bot");
+    }
+    if (!(await this.attempts.attempt(caller.account))) {
+      throw new ConnectionError(429, "Retry in a few minutes");
+    }
+    if (await this.connected(caller.account, "telegram")) {
+      throw new ConnectionError(409, "Unlink the current Telegram chat before linking another");
+    }
+    try {
+      return { url: await this.telegram.begin(caller.account) };
+    } catch {
+      throw new ConnectionError(502, "The Telegram link did not start");
+    }
+  }
+
   /** Starts an OAuth connection and returns where to send the browser. */
   async connect(caller: Caller, name: string): Promise<{ url: string }> {
     this.known(name);
+    if (name === "telegram") return this.linkTelegram(caller);
     const keyed = KEY_APPS[name];
     if (keyed) throw new ConnectionError(409, `Connect ${keyed.label} with an API key in Apps`);
     if (!this.configured(name)) {
@@ -537,7 +615,7 @@ export class AppConnections {
     this.known(name);
     const state = query.state ?? "";
     const code = query.code ?? "";
-    if (name in KEY_APPS || state.length !== 43 || !this.configured(name)) {
+    if (name === "telegram" || name in KEY_APPS || state.length !== 43 || !this.configured(name)) {
       throw new ConnectionError(400, "Begin connecting the app again");
     }
     await this.locked(caller.account, name, async () => {
@@ -615,7 +693,9 @@ export class AppConnections {
 
   /** Asks the provider to drop the grant; true when it confirmed. */
   async revoke(account: string, name: string, token: SavedToken): Promise<boolean> {
-    if (name in KEY_APPS || name === "wispr" || !this.configured(name)) return false;
+    if (name in KEY_APPS || ["wispr", "telegram"].includes(name) || !this.configured(name)) {
+      return false;
+    }
     const app = OAUTH_APPS[name] as OAuthApp;
     let reply: Response;
     const form = (fields: Record<string, string>) => ({
@@ -681,6 +761,7 @@ export class AppConnections {
     let revoked = false;
     await this.locked(caller.account, name, async () => {
       await this.stillSignedIn(caller, "Your session ended; sign in before disconnecting an app");
+      if (name === "telegram") this.telegram.forget(caller.account);
       await this.clearGrants(caller.account, name);
       try {
         const token = await this.credential(caller.account, name);

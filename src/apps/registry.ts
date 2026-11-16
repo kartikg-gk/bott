@@ -9,6 +9,7 @@ import { granola } from "./granola.ts";
 import { AppError, type Fetch, HttpError } from "./http.ts";
 import { linear } from "./linear.ts";
 import { notion } from "./notion.ts";
+import { telegram } from "./telegram.ts";
 import { todoist } from "./todoist.ts";
 import { webScrape } from "./webScrape.ts";
 import { webSearch } from "./webSearch.ts";
@@ -28,6 +29,7 @@ const ORDER: App[] = [
   granola,
   webSearch,
   webScrape,
+  telegram,
 ];
 
 /** Every app the server can run, by name. */
