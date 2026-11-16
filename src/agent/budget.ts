@@ -103,7 +103,7 @@ export async function compact(
   const { transcript } = opts;
   const n = transcript.length;
   const keep = Math.max(opts.keepRecent ?? 4, Math.floor(n / 4));
-  let cut = n - keep;
+  let cut = Math.max(0, n - keep);
   // A result must stay with its call: back up until the kept part starts on a non-result.
   while (cut > 0 && transcript[cut]?.role === "tool") cut--;
   const dropped = transcript.slice(0, cut);

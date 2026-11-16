@@ -235,4 +235,20 @@ describe("compact", () => {
     expect(out.transcript).toEqual(t);
     expect(provider.requests).toHaveLength(0);
   });
+
+  it("short transcript ending in a result is left whole", async () => {
+    const t = [user("a"), calling("c1"), result("c1", "r")];
+    const provider = fakeProvider([]);
+    const out = await compact({ provider, model: "m", transcript: t, signal });
+    expect(out.transcript).toEqual(t);
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it("keepRecent larger than the transcript drops nothing", async () => {
+    const t = [user("a"), said("b"), user("c"), said("d"), user("e")];
+    const provider = fakeProvider([]);
+    const out = await compact({ provider, model: "m", transcript: t, keepRecent: 50, signal });
+    expect(out.transcript).toEqual(t);
+    expect(provider.requests).toHaveLength(0);
+  });
 });
