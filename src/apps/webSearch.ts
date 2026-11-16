@@ -64,13 +64,19 @@ function result(item: unknown): Item | null {
 
 export const webSearch: App = {
   name: "web_search",
-  tools: [tool("web_search", "Search the open web and get links with short excerpts.", { query: text })],
+  tools: [
+    tool(
+      "web_search",
+      "Looks something up on the open web and returns links with short extracts.",
+      { query: text },
+    ),
+  ],
   configured: (env) => envSet(env, TAVILY_KEY) || envSet(env, EXA_KEY),
   async run(ctx, _name, args) {
     if (ctx.accounts) throw new AppError(OPERATOR_ONLY);
     const query = String(args.query).trim();
     if (!query || query.length > 500) {
-      throw new AppError("A search needs 1 to 500 characters");
+      throw new AppError("A search needs between 1 and 500 characters of text");
     }
     const ready = PROVIDERS.filter((p) => envSet(ctx.env, p.key));
     if (ready.length === 0) throw new AppError("Configure a search provider on the server");
@@ -92,6 +98,6 @@ export const webSearch: App = {
       if (results.length) return jsonOutput({ provider: provider.name, results });
     }
     if (answered) return jsonOutput({ results: [] });
-    throw new AppError("None of the web search services set up could be reached");
+    throw new AppError("None of the web search services set up here answered");
   },
 };

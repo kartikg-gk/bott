@@ -36,7 +36,7 @@ describe("public URLs", () => {
       "https://example.com/a b",
       "https://example.com\\@evil.test/",
     ]) {
-      expect(() => publicUrl(url), url).toThrow("Give a public HTTP or HTTPS address");
+      expect(() => publicUrl(url), url).toThrow("Give a public http or https address");
     }
   });
 });
@@ -106,10 +106,10 @@ describe("web search", () => {
     expect(parse(await empty.run("web_search", { query: "x" }))).toEqual({ results: [] });
     const down = new AppRunner({ fetch: fakeFetch({}), env: { BOTT_EXA_API_KEY: "ex" } });
     await expect(down.run("web_search", { query: "x" })).rejects.toThrow(
-      "None of the web search services set up could be reached",
+      "None of the web search services set up here answered",
     );
     await expect(down.run("web_search", { query: "q".repeat(501) })).rejects.toThrow(
-      "A search needs 1 to 500 characters",
+      "A search needs between 1 and 500 characters of text",
     );
   });
 });

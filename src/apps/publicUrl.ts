@@ -43,7 +43,7 @@ export function publicAddress(address: string): boolean {
   return false;
 }
 
-const REFUSED = "Give a public HTTP or HTTPS address with no credentials in it";
+const REFUSED = "Give a public http or https address with no user name or password in it";
 
 /** The URL itself when it names a public web host; anything local or private is refused. */
 export function publicUrl(value: unknown): string {

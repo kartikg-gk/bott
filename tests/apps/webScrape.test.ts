@@ -37,7 +37,7 @@ describe("page reading", () => {
     const fetcher = fakeFetch({ [SCRAPER]: () => status(500) });
     const apps = new AppRunner({ fetch: fetcher, env: ENV });
     await expect(apps.run("web_scrape", { url: "http://10.0.0.1/" })).rejects.toThrow(
-      "Give a public HTTP or HTTPS address",
+      "Give a public http or https address",
     );
     expect(fetcher.seen).toHaveLength(0);
     await expect(apps.run("web_scrape", { url: "https://a.example/" })).rejects.toThrow(
