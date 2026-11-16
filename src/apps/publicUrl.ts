@@ -61,7 +61,13 @@ export function publicUrl(value: unknown): string {
   } catch {
     throw new AppError(REFUSED);
   }
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+  // The parser keeps port 0, which no web server listens on.
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.port === "0"
+  ) {
     throw new AppError(REFUSED);
   }
   const host = url.hostname.replace(/\.$/, "").toLowerCase();

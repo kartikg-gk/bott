@@ -35,6 +35,8 @@ describe("public URLs", () => {
       "http://intranet/",
       "https://example.com/a b",
       "https://example.com\\@evil.test/",
+      "http://example.com:0/",
+      "https://example.com:00/x",
     ]) {
       expect(() => publicUrl(url), url).toThrow("Give a public http or https address");
     }
