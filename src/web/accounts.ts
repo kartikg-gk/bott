@@ -8,7 +8,7 @@ import { SqliteDatabase } from "../db/sqlite.ts";
 import type { LimitsConfig } from "../limits/limits.ts";
 import type { ProviderFactory } from "../runtime/sessions.ts";
 import { type AppsSeam, NO_APPS } from "./apps.ts";
-import { Gateway } from "./gateway.ts";
+import { Gateway, type GatewayOptions } from "./gateway.ts";
 
 /** Inside each account's own instance, the page acts for this one person. */
 export const ACCOUNT_ACTOR = 1;
@@ -32,6 +32,8 @@ export interface AccountGatewaysOptions {
   fixed?: ProviderFactory;
   /** Connected apps for each account's bots; none when left out. */
   apps?: AppsSeam;
+  /** Long-term memory for each account's gateway; off when left out. */
+  memory?: GatewayOptions["memory"];
 }
 
 /**
@@ -78,6 +80,7 @@ export class AccountGateways {
           requireAccountModel: !opts.fixed,
           ...(opts.workers === undefined ? {} : { workers: opts.workers }),
           ...(opts.computers ? { computers: opts.computers } : {}),
+          ...(opts.memory ? { memory: opts.memory } : {}),
         });
         await (opts.apps ?? NO_APPS).attach(gateway, runtime.account);
         return gateway;
