@@ -44,7 +44,7 @@ export const execute: Execute = (program, args, input, limit) =>
       child.kill();
     };
     const timer = setTimeout(
-      () => stop(new AppError("Reading the document took too long")),
+      () => stop(new AppError("Turning the document into text took too long")),
       TIMEOUT_MS,
     );
     child.on("error", (error: NodeJS.ErrnoException) => {
@@ -55,7 +55,8 @@ export const execute: Execute = (program, args, input, limit) =>
     });
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > limit) stop(new AppError("Reading the document gave more output than allowed"));
+      if (size > limit)
+        stop(new AppError("The document gave more text than this server will hold"));
       else parts.push(chunk);
     });
     child.stdin.on("error", () => {});
@@ -73,7 +74,7 @@ function checkDimensions(width: number, height: number): void {
     !(width > 0 && width <= 6000 && height > 0 && height <= 6000) ||
     width * height > 16_000_000
   ) {
-    throw new AppError("The image is too large to read text from");
+    throw new AppError("The image is too large in width or height to read text from");
   }
 }
 
@@ -111,7 +112,7 @@ export function documentKind(data: Buffer, mime: string | undefined): "pdf" | "i
     checkDimensions(...jpegDimensions(data));
     return "image";
   }
-  throw new AppError("Only PDF, PNG and JPEG attachments can be read");
+  throw new AppError("Only PDF, PNG and JPEG files can be turned into text");
 }
 
 /** Turns PDFs and images into text with pdftotext, pdftoppm and tesseract on the server. */
@@ -181,7 +182,7 @@ export class Documents {
     const page = args.page ?? 1;
     const start = args.offset ?? 0;
     if (!(page >= 1 && page <= 100) || (kind === "image" && page !== 1)) {
-      throw new AppError("Pick page 1 for an image, or a PDF page between 1 and 100");
+      throw new AppError("An image has only page 1; a PDF page must be between 1 and 100");
     }
     const key = `${createHash("sha256").update(data).digest("hex")}:${kind}:${page}`;
     const release = await this.slot();
@@ -196,7 +197,7 @@ export class Documents {
     }
     const [text, method] = result;
     if (start < 0 || start > text.length) {
-      throw new AppError("That offset is past the end of the page text");
+      throw new AppError("That offset is past the end of the page's text");
     }
     const end = start + PAGE_CHARS;
     return {

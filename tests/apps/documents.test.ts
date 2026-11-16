@@ -38,9 +38,9 @@ describe("documents", () => {
     expect(documentKind(pdf, "application/pdf")).toBe("pdf");
     expect(documentKind(png(100, 100), "image/png")).toBe("image");
     expect(documentKind(jpeg(640, 480), "image/jpeg")).toBe("image");
-    expect(() => documentKind(pdf, "image/png")).toThrow("PDF, PNG and JPEG attachments can be read");
-    expect(() => documentKind(png(7000, 10), "image/png")).toThrow("OCR dimension limit");
-    expect(() => documentKind(jpeg(5000, 5000), "image/jpeg")).toThrow("OCR dimension limit");
+    expect(() => documentKind(pdf, "image/png")).toThrow("Only PDF, PNG and JPEG files");
+    expect(() => documentKind(png(7000, 10), "image/png")).toThrow("too large in width or height");
+    expect(() => documentKind(jpeg(5000, 5000), "image/jpeg")).toThrow("too large in width or height");
   });
 
   it("uses the PDF's own text first and pages it", async () => {
@@ -59,7 +59,7 @@ describe("documents", () => {
     expect(next.markdown).toHaveLength(600);
     expect(ran).toHaveLength(1);
     await expect(documents.read(pdf, "application/pdf", { page: 2, offset: 9999 })).rejects.toThrow(
-      "That offset is past the end of the page text",
+      "That offset is past the end of the page's text",
     );
   });
 
@@ -73,7 +73,7 @@ describe("documents", () => {
     expect(ran.map((r) => r.program)).toEqual(["pdftotext", "pdftoppm", "tesseract"]);
     expect(ran[2]?.input).toBe(7);
     await expect(documents.read(png(10, 10), "image/png", { page: 2 })).rejects.toThrow(
-      "Pick page 1 for an image",
+      "An image has only page 1",
     );
   });
 
