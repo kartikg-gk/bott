@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { App } from "./app.ts";
+import type { App, AppServices } from "./app.ts";
+import { MAX_DOCUMENT_BYTES } from "./documents.ts";
 import { type GoogleApi, googleApi, segment } from "./google.ts";
 import { AppError, HttpError, jsonOutput, NetworkError, withParams } from "./http.ts";
 import { offset, text, tool } from "./schema.ts";
@@ -33,6 +34,13 @@ export const driveTools = [
       version: text,
     },
     { optional: ["format", "export_mime", "offset", "version"] },
+  ),
+  tool(
+    "drive_extract_document",
+    "Extract text from an uploaded PDF, PNG or JPEG on the server. " +
+      "Pick a page, and pass nextOffset to read on.",
+    { file_id: text, page: z.number().int().min(1).max(100), offset },
+    { optional: ["page", "offset"] },
   ),
 ];
 
@@ -223,6 +231,36 @@ async function readFile(api: GoogleApi, a: Item): Promise<Item> {
   };
 }
 
+const EXTRACTABLE = new Set(["application/pdf", "image/png", "image/jpeg"]);
+
+/** Downloads an uploaded document whole, within the size limit, and extracts a page of it. */
+async function extractDocument(
+  api: GoogleApi,
+  a: Item,
+  documents: NonNullable<AppServices["documents"]>,
+): Promise<Item> {
+  const fileId: string = a.file_id;
+  const metadata = await fileMetadata(api, fileId);
+  const mime: string = metadata.mimeType;
+  if (mime === `${GOOGLE_FILE}shortcut`) return { shortcut: metadata.shortcutDetails?.targetId };
+  const version = metadata.version;
+  if (metadata.capabilities?.canDownload === false) {
+    throw new AppError("Drive does not let this file be downloaded");
+  }
+  if (!EXTRACTABLE.has(mime)) throw new AppError("Pick a stored PDF, PNG or JPEG to read");
+  if (Number(metadata.size ?? 0) > MAX_DOCUMENT_BYTES) {
+    throw new AppError("The attachment is larger than 8 MiB");
+  }
+  const url = `${DRIVE_API}/${segment(fileId)}`;
+  const params = { alt: "media", supportsAllDrives: "true" };
+  const { data, more } = await mediaPage(api, url, params, 0, MAX_DOCUMENT_BYTES, false);
+  if (more) throw new AppError("The attachment is larger than 8 MiB");
+  if (version && (await currentVersion(api, fileId)) !== version) {
+    throw new AppError("The attachment changed while downloading; please retry.");
+  }
+  return { id: fileId, version: version ?? null, ...(await documents.read(data, mime, a)) };
+}
+
 export const drive: App = {
   name: "drive",
   tools: driveTools,
@@ -231,6 +269,11 @@ export const drive: App = {
     const api = googleApi(ctx.fetch, await ctx.token());
     if (name === "drive_search") return jsonOutput(await search(api, args));
     if (name === "drive_read_file") return jsonOutput(await readFile(api, args));
+    if (name === "drive_extract_document") {
+      const documents = ctx.services.documents;
+      if (!documents) throw new AppError("Document extraction is not available on this server");
+      return jsonOutput(await extractDocument(api, args, documents));
+    }
     throw new AppError("Unknown tool");
   },
 };

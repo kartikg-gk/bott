@@ -1,6 +1,7 @@
 import type { App, AppContext, AppServices, Env } from "./app.ts";
 import { calendar } from "./calendar.ts";
 import { contacts } from "./contacts.ts";
+import { Documents } from "./documents.ts";
 import { drive } from "./drive.ts";
 import { github } from "./github.ts";
 import { gmail } from "./gmail.ts";
@@ -59,12 +60,14 @@ export class AppRunner {
   readonly accounts: boolean;
   private readonly fetcher: Fetch;
   private readonly env: Env;
+  private readonly services: AppServices;
 
   constructor(private readonly opts: RunnerOptions = {}) {
     this.apps = opts.apps ?? APPS;
     this.fetcher = opts.fetch ?? fetch;
     this.env = opts.env ?? process.env;
     this.accounts = opts.accessToken !== undefined;
+    this.services = { documents: new Documents(), ...opts.services };
   }
 
   async configured(name: string): Promise<boolean> {
@@ -86,7 +89,7 @@ export class AppRunner {
       env: this.env,
       accounts: this.accounts,
       botName,
-      services: this.opts.services ?? {},
+      services: this.services,
       token: async () => {
         if (!accessToken) throw new AppError(`Connect ${app.name} from a signed-in account`);
         current ??= await accessToken(app.name);

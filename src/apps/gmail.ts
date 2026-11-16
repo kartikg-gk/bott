@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { type App, type AppContext, envSet } from "./app.ts";
-import { AppError, HttpError, jsonOutput, request, send } from "./http.ts";
+import { MAX_DOCUMENT_BYTES, MAX_GMAIL_RESPONSE } from "./documents.ts";
+import { AppError, boundedBytes, HttpError, jsonOutput, request, send } from "./http.ts";
 import { offset, text, textList, tool } from "./schema.ts";
 
 export const GMAIL_CLIENT_ID = "BOTT_GMAIL_CLIENT_ID";
@@ -28,6 +29,13 @@ const tools = [
       "Use base64 for binary content; pass nextOffset to read on.",
     { message_id: text, part: text, offset, format: z.enum(["text", "base64"]) },
     { optional: ["offset", "format"] },
+  ),
+  tool(
+    "gmail_extract_attachment",
+    "Extract a page of a PDF, PNG or JPEG Gmail attachment on the server. " +
+      "Use a message's part ID and pass nextOffset to continue.",
+    { message_id: text, part: text, page: z.number().int().min(1).max(100), offset },
+    { optional: ["page", "offset"] },
   ),
   tool("gmail_list_labels", "Show Gmail labels with their IDs.", {}),
   tool(
@@ -202,6 +210,30 @@ async function readAttachment(ctx: AppContext, headers: Record<string, string>, 
   });
 }
 
+/** Extracts a page of text from an attachment, downloading no more than the size limits. */
+async function extractAttachment(ctx: AppContext, headers: Record<string, string>, a: Item) {
+  const documents = ctx.services.documents;
+  if (!documents) throw new AppError("Document extraction is not available on this server");
+  const load = async (path: string) => {
+    const reply = await send(ctx.fetch, "GET", GMAIL_API + path, { headers });
+    const body = await boundedBytes(
+      reply,
+      MAX_GMAIL_RESPONSE,
+      "The attachment exceeds the server extraction size limit",
+    );
+    return JSON.parse(Buffer.from(body).toString("utf8")) as Item;
+  };
+  const { part, raw } = await attachmentData(ctx, headers, a.message_id, a.part, load, (found) => {
+    if (Number(found.body?.size ?? 0) > MAX_DOCUMENT_BYTES) {
+      throw new AppError("The attachment is larger than 8 MiB");
+    }
+  });
+  return jsonOutput({
+    filename: part.filename ?? null,
+    ...(await documents.read(raw, part.mimeType, a)),
+  });
+}
+
 export async function runGmail(ctx: AppContext, name: string, a: Item): Promise<string> {
   const headers = await gmailHeaders(ctx);
   const get = (path: string, params?: Record<string, string | number>) =>
@@ -226,6 +258,8 @@ export async function runGmail(ctx: AppContext, name: string, a: Item): Promise<
     }
     case "gmail_read_attachment":
       return readAttachment(ctx, headers, a);
+    case "gmail_extract_attachment":
+      return extractAttachment(ctx, headers, a);
     case "gmail_list_labels":
       return jsonOutput((await get("/labels")).labels ?? []);
     case "gmail_modify_labels": {
