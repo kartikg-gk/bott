@@ -7,14 +7,14 @@ import { OPERATOR_ONLY } from "./webSearch.ts";
 export const SCRAPER_KEY = "BOTT_SCRAPERAPI_API_KEY";
 const PAGE = 2200;
 const LIMIT = 200_000;
-const UNREADABLE = "The page reader could not get that page";
+const UNREADABLE = "The page reading service could not get that page";
 
 export const webScrape: App = {
   name: "web_scrape",
   tools: [
     tool(
       "web_scrape",
-      "Read a public page as Markdown; each read may use page reading credits.",
+      "Fetches a public page and returns it as Markdown. Every call may cost page reading credits.",
       { url: text, offset },
       { optional: ["offset"], write: true, review: true },
     ),
@@ -26,7 +26,8 @@ export const webScrape: App = {
     const key = ctx.env[SCRAPER_KEY]?.trim();
     if (!key) throw new AppError("Configure the page extraction provider on the server");
     const start = (args.offset as number | undefined) ?? 0;
-    if (start < 0 || start >= LIMIT) throw new AppError("The page offset has to be below 200000");
+    if (start < 0 || start >= LIMIT)
+      throw new AppError("The offset has to stay under 200000 characters");
     const end = Math.min(start + PAGE, LIMIT);
     let read = "";
     try {

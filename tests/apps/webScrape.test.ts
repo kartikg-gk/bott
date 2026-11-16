@@ -41,10 +41,10 @@ describe("page reading", () => {
     );
     expect(fetcher.seen).toHaveLength(0);
     await expect(apps.run("web_scrape", { url: "https://a.example/" })).rejects.toThrow(
-      "The page reader could not get that page",
+      "The page reading service could not get that page",
     );
     await expect(
       apps.run("web_scrape", { url: "https://a.example/", offset: 200000 }),
-    ).rejects.toThrow("The page offset has to be below 200000");
+    ).rejects.toThrow("The offset has to stay under 200000 characters");
   });
 });
