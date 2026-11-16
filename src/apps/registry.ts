@@ -9,6 +9,7 @@ import { AppError, type Fetch, HttpError } from "./http.ts";
 import { linear } from "./linear.ts";
 import { notion } from "./notion.ts";
 import { todoist } from "./todoist.ts";
+import { webScrape } from "./webScrape.ts";
 import { webSearch } from "./webSearch.ts";
 import { wispr } from "./wispr.ts";
 
@@ -25,6 +26,7 @@ const ORDER: App[] = [
   wispr,
   granola,
   webSearch,
+  webScrape,
 ];
 
 /** Every app the server can run, by name. */
