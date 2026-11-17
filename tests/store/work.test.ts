@@ -96,4 +96,17 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const row = (await db.query("SELECT status,answer,finished FROM delegations"))[0];
     expect(row).toEqual({ status: "failed", answer: "boom", finished: now });
   });
+
+  it("a task and a delegation can finish as timed out", async () => {
+    const { store, db } = await fresh();
+    const id = await store.addTask(spec("slow"));
+    expect(await store.finishTask(id, "timed_out", "Task timed out")).toBe(true);
+    expect(await store.task(id)).toMatchObject({ status: "timed_out", answer: "Task timed out" });
+    const route = await store.conversation(1, 2);
+    const delegation = (await store.beginDelegation(route, "bot-a", "slow")) as number;
+    expect(await store.finishDelegation(delegation, "timed_out", "")).toBe(true);
+    const row = (await db.query("SELECT status FROM delegations WHERE id=?", [delegation]))[0];
+    expect(row).toEqual({ status: "timed_out" });
+    expect(await store.beginDelegation(route, "bot-a", "again")).not.toBeNull();
+  });
 });

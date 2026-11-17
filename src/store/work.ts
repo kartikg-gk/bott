@@ -2,6 +2,9 @@ import { ConstraintError, type Row } from "../db/database.js";
 import type { StoreContext } from "./context.js";
 import type { Route } from "./routes.js";
 
+/** How work ends. Anything but "running" is final. */
+export type WorkStatus = "done" | "failed" | "cancelled" | "interrupted" | "timed_out";
+
 export interface Task {
   id: number;
   chat: number;
@@ -12,7 +15,7 @@ export interface Task {
   goal: string;
   policy: string;
   followUp: boolean;
-  status: "running" | "done" | "failed" | "cancelled" | "interrupted";
+  status: "running" | WorkStatus;
   answer: string | null;
 }
 
@@ -85,7 +88,7 @@ export async function runningTasks(ctx: StoreContext): Promise<Task[]> {
 export async function finishTask(
   ctx: StoreContext,
   id: number,
-  status: Task["status"],
+  status: WorkStatus,
   answer: string | null,
 ): Promise<boolean> {
   const changed = await ctx.db.run(
@@ -124,7 +127,7 @@ export async function beginDelegation(
 export async function finishDelegation(
   ctx: StoreContext,
   id: number,
-  status: string,
+  status: WorkStatus,
   answer: string | null,
 ): Promise<boolean> {
   const changed = await ctx.db.run(

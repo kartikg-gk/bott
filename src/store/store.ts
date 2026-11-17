@@ -15,7 +15,7 @@ const DAY = 86400;
 export type { Approval, Decision, InboxItem, InboxStatus, TaskNotice } from "./inbox.js";
 export { REPORT_IDS, WEB_IDS } from "./inbox.js";
 export type { Route } from "./routes.js";
-export type { Task } from "./work.js";
+export type { Task, WorkStatus } from "./work.js";
 
 export interface StoreOptions {
   retentionDays?: number;
@@ -181,7 +181,7 @@ export class Store {
     return work.runningTasks(this.ctx);
   }
 
-  finishTask(id: number, status: work.Task["status"], answer: string | null) {
+  finishTask(id: number, status: work.WorkStatus, answer: string | null) {
     return work.finishTask(this.ctx, id, status, answer);
   }
 
@@ -189,7 +189,7 @@ export class Store {
     return work.beginDelegation(this.ctx, route, bot, task);
   }
 
-  finishDelegation(id: number, status: string, answer: string | null) {
+  finishDelegation(id: number, status: work.WorkStatus, answer: string | null) {
     return work.finishDelegation(this.ctx, id, status, answer);
   }
 
