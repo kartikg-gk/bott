@@ -67,7 +67,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       (await store.session(await store.signIn(subject, `${subject}@x.test`, null))) as NonNullable<
         Awaited<ReturnType<AccountStore["session"]>>
       >;
-    return { db, store, runtimes, stateDir, sent, created, account };
+    return { db, store, runtimes, stateDir, sent, created, account, allowed };
   }
 
   it("gives each account its own instance, folders and saved model", async () => {
@@ -129,6 +129,36 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await account("bob");
     await runtimes.start();
     expect(created.map((runtime) => runtime.instance)).toEqual([alice.id]);
+  });
+
+  it("lists the runtimes of accounts that exist and are allowed now", async () => {
+    const { db, runtimes, account } = await fresh({ allowed: ["alice@x.test", "bob@x.test"] });
+    const alice = await account("alice");
+    const ids = async () =>
+      (await runtimes.current()).map((service) => service.runtime.account.id).sort();
+    expect(await ids()).toEqual([alice.id]);
+
+    // An account made after the first look is listed at the next one.
+    const bob = await account("bob");
+    expect(await ids()).toEqual([alice.id, bob.id].sort());
+
+    // A removed account is left out, while the other keeps the runtime it had.
+    const before = await runtimes.get(bob);
+    await db.run("DELETE FROM sessions WHERE account=?", [alice.id]);
+    await db.run("DELETE FROM accounts WHERE id=?", [alice.id]);
+    expect(await ids()).toEqual([bob.id]);
+    expect((await runtimes.current())[0]).toBe(before);
+  });
+
+  it("leaves out an account no longer on the allow list", async () => {
+    const { runtimes, account, allowed } = await fresh();
+    await account("alice");
+    const bob = await account("bob");
+    expect(await runtimes.current()).toHaveLength(2);
+    allowed.delete("alice@x.test");
+    expect((await runtimes.current()).map((service) => service.runtime.account.id)).toEqual([
+      bob.id,
+    ]);
   });
 
   it("refuses an account ID that is not a UUID", async () => {

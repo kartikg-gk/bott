@@ -105,8 +105,21 @@ export class AccountRuntimes<T> {
 
   /** Reopens every account still allowed, so its scheduled work runs before anyone signs in. */
   async start(): Promise<void> {
+    await this.current();
+  }
+
+  /**
+   * The runtimes of the accounts that exist and are allowed now, built for any account new
+   * since the last look. One removed or no longer allowed is left out, though a runtime
+   * already built for it stays as it is.
+   */
+  async current(): Promise<T[]> {
+    const found: T[] = [];
     for (const account of await this.opts.store.allAccounts()) {
-      if (this.opts.login.permitted(account.email, account.domain)) await this.get(account);
+      if (this.opts.login.permitted(account.email, account.domain)) {
+        found.push(await this.get(account));
+      }
     }
+    return found;
   }
 }

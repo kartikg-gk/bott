@@ -16,7 +16,7 @@ import { type Config, ConfigError, type Env, PROVIDER_KEYS, readConfig } from ".
 import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { databaseStatus, SCHEMA_MARK } from "./db/status.ts";
 import { checkDatabase, ImportError, importLocal } from "./db/transfer.ts";
-import { runRunner } from "./runner.ts";
+import { runRunners } from "./runner.ts";
 import type { ProviderFactory } from "./runtime/sessions.ts";
 import { serveNode } from "./server.ts";
 import { startServer } from "./startup.ts";
@@ -132,21 +132,25 @@ async function runner(io: Io, config: Config, args: string[]): Promise<number> {
     ...(io.providers ? { providers: io.providers } : {}),
   });
   try {
-    const gateways = await server.gateways();
-    io.out(`Running scheduled work for ${gateways.length} instance(s)`);
-    await Promise.all(
-      gateways.map((gateway) =>
-        runRunner({
-          store: gateway.store,
-          sessions: gateway.sessions,
-          sink: gateway.channel,
-          instance: gateway.store.ctx.instance,
-          once: values.once ?? false,
-          ...(config.workers === undefined ? {} : { workers: config.workers }),
-          ...(io.signal ? { signal: io.signal } : {}),
-        }),
-      ),
-    );
+    let told = false;
+    // Asked again while running, so accounts made later are covered without a restart.
+    const targets = async () => {
+      const gateways = await server.gateways();
+      if (!told) io.out(`Running scheduled work for ${gateways.length} instance(s)`);
+      told = true;
+      return gateways.map((gateway) => ({
+        store: gateway.store,
+        sessions: gateway.sessions,
+        sink: gateway.channel,
+        instance: gateway.store.ctx.instance,
+      }));
+    };
+    await runRunners({
+      targets,
+      once: values.once ?? false,
+      ...(config.workers === undefined ? {} : { workers: config.workers }),
+      ...(io.signal ? { signal: io.signal } : {}),
+    });
   } finally {
     await server.close();
   }

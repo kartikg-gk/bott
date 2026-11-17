@@ -78,6 +78,107 @@ export async function runRunner(opts: RunnerOptions): Promise<void> {
   }
 }
 
+/** One instance a runner can cover: its store, sessions and where answers go. */
+export type RunnerTarget = Pick<RunnerOptions, "store" | "sessions" | "sink" | "instance">;
+
+export interface RunnersOptions extends Pick<RunnerOptions, "once" | "poll" | "ttl" | "workers"> {
+  /** The instances that should be covered now; asked again every `refresh` seconds. */
+  targets: () => Promise<RunnerTarget[]>;
+  /** Seconds between looks at which instances to cover. */
+  refresh?: number;
+  /** Stops every runner; their running jobs end interrupted. */
+  signal?: AbortSignal;
+}
+
+/** How often the set of covered instances is looked at again, in seconds. */
+const REFRESH_SECONDS = 30;
+
+/** Resolves after `ms`, or sooner once `signal` aborts. */
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    if (signal.aborted) done();
+    else signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+/**
+ * Keeps one runner going for each instance `targets` names. The list is read again every
+ * `refresh` seconds: an instance that appears gets a runner without a restart, and one that is
+ * gone has its runner stopped. With `once`, each instance listed at the start runs its due work
+ * once. If any runner fails, all of them stop and the failure is thrown.
+ */
+export async function runRunners(opts: RunnersOptions): Promise<void> {
+  const shared = { once: opts.once, poll: opts.poll, ttl: opts.ttl, workers: opts.workers };
+  const settings = Object.fromEntries(
+    Object.entries(shared).filter(([, value]) => value !== undefined),
+  ) as Partial<RunnerOptions>;
+  if (opts.once) {
+    const targets = await opts.targets();
+    await Promise.all(targets.map((target) => runRunner({ ...target, ...settings })));
+    return;
+  }
+  const stopAll = new AbortController();
+  const stop = () => stopAll.abort();
+  if (opts.signal?.aborted) stop();
+  opts.signal?.addEventListener("abort", stop, { once: true });
+  const covered = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  let failure: { error: unknown } | undefined;
+  const cover = (target: RunnerTarget) => {
+    const controller = new AbortController();
+    const entry = {
+      controller,
+      done: runRunner({ ...target, ...settings, signal: controller.signal })
+        .catch((error: unknown) => {
+          failure ??= { error };
+          stopAll.abort();
+        })
+        .finally(() => {
+          if (covered.get(target.instance) === entry) covered.delete(target.instance);
+        }),
+    };
+    covered.set(target.instance, entry);
+  };
+  try {
+    let first = true;
+    while (!stopAll.signal.aborted) {
+      let targets: RunnerTarget[] | undefined;
+      try {
+        targets = await opts.targets();
+      } catch (error) {
+        // Without a first list there is nothing to run; a later miss keeps what is covered.
+        if (first) throw error;
+      }
+      first = false;
+      if (targets && !stopAll.signal.aborted) {
+        const wanted = new Set(targets.map((target) => target.instance));
+        for (const [instance, entry] of covered) {
+          if (!wanted.has(instance)) entry.controller.abort();
+        }
+        for (const target of targets) {
+          const entry = covered.get(target.instance);
+          // A runner still stopping from an earlier removal is replaced once it has let go.
+          if (!entry || entry.controller.signal.aborted) {
+            if (entry) await entry.done;
+            if (!stopAll.signal.aborted) cover(target);
+          }
+        }
+      }
+      await wait((opts.refresh ?? REFRESH_SECONDS) * 1000, stopAll.signal);
+    }
+  } finally {
+    opts.signal?.removeEventListener("abort", stop);
+    for (const entry of covered.values()) entry.controller.abort();
+    await Promise.all([...covered.values()].map((entry) => entry.done));
+  }
+  if (failure) throw failure.error;
+}
+
 class Runner {
   private readonly store: Store;
   private readonly lease: Lease;

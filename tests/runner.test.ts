@@ -7,7 +7,7 @@ import { emptyUsage } from "../src/agent/transcript.ts";
 import type { Bot } from "../src/bots/bots.ts";
 import type { Database } from "../src/db/database.ts";
 import { Lease } from "../src/db/leases.ts";
-import { runRunner } from "../src/runner.ts";
+import { runRunner, runRunners } from "../src/runner.ts";
 import { type RuntimeConfig, SessionManager } from "../src/runtime/sessions.ts";
 import { receiveWakeup, wakeupHistory } from "../src/schedule/wakeups.ts";
 import { MISSED_GRACE, Store } from "../src/store/store.ts";
@@ -485,5 +485,106 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(sink.texts()).toEqual([]);
     expect(await db.query("SELECT * FROM leases")).toEqual([]);
     expect(await db.query("SELECT * FROM scheduler_leases")).toEqual([]);
+  });
+});
+
+describe("covering several instances", () => {
+  const open: Database[] = [];
+  const folders: string[] = [];
+  const managers: SessionManager[] = [];
+  afterEach(async () => {
+    await Promise.all(managers.splice(0).map((m) => m.close()));
+    await Promise.all(open.splice(0).map((db) => db.close()));
+    for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+  });
+
+  /** One instance with its own database, a due job, and a model that answers `text`. */
+  async function instance(name: string, text: string) {
+    const { db } = database("sqlite");
+    open.push(db);
+    const store = await Store.open(db, name, { clock: () => NOW });
+    const root = mkdtempSync(join(tmpdir(), "runners-"));
+    folders.push(root);
+    const sessions = new SessionManager(
+      {
+        stateDir: join(root, "state"),
+        projectDir: join(root, "project"),
+        sessionsDir: join(root, "sessions"),
+        policy: "auto",
+        model: "m",
+        idleSeconds: 60,
+      },
+      store,
+      (): ModelProvider => ({
+        id: "fake",
+        async *stream() {
+          yield* reply(text);
+        },
+      }),
+    );
+    managers.push(sessions);
+    const chief = await store.chief();
+    const job = await store.addJob({
+      chat: 1,
+      user: 1,
+      actor: 1,
+      thread: 0,
+      bot: chief.id,
+      task: "check",
+      spec: "once",
+      first: NOW - 1,
+    });
+    const sink = new MemorySink();
+    return { db, store, sessions, sink, instance: name, job };
+  }
+
+  it("starts runners for instances that appear and stops those that go", async () => {
+    const first = await instance("first", "first done");
+    const second = await instance("second", "second done");
+    let listed = [first];
+    const stop = new AbortController();
+    const done = runRunners({
+      targets: async () => listed,
+      poll: POLL,
+      refresh: POLL,
+      signal: stop.signal,
+    });
+    await until(async () => (await first.store.job(first.job))?.lastStatus === "completed");
+    expect(await first.db.query("SELECT * FROM leases")).toHaveLength(1);
+
+    // An account made after the start is picked up without a restart.
+    listed = [first, second];
+    await until(async () => (await second.store.job(second.job))?.lastStatus === "completed");
+    expect(second.sink.texts()[0]).toContain("second done");
+
+    // A removed one is no longer covered: its runner lets go of its hold.
+    listed = [second];
+    await until(async () => (await first.db.query("SELECT * FROM leases")).length === 0);
+    expect(await second.db.query("SELECT * FROM leases")).toHaveLength(1);
+
+    stop.abort();
+    await done;
+    expect(await second.db.query("SELECT * FROM leases")).toEqual([]);
+  });
+
+  it("runs once over every instance listed at the start", async () => {
+    const first = await instance("first", "first done");
+    const second = await instance("second", "second done");
+    await runRunners({ targets: async () => [first, second], once: true, poll: POLL });
+    expect(first.sink.texts()[0]).toContain("first done");
+    expect(second.sink.texts()[0]).toContain("second done");
+  });
+
+  it("stops every runner and fails when one of them cannot run", async () => {
+    const first = await instance("first", "first done");
+    const taken = await instance("taken", "never");
+    await new Lease(taken.db, "runner-taken", {
+      ttlSeconds: 600,
+      clock: () => NOW * 1000,
+    }).acquire();
+    await expect(
+      runRunners({ targets: async () => [first, taken], poll: POLL, refresh: POLL }),
+    ).rejects.toThrow("Another runner holds this instance; stop it or wait for its hold to run out");
+    expect(await first.db.query("SELECT * FROM leases")).toEqual([]);
   });
 });

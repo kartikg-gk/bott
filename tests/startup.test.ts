@@ -97,6 +97,28 @@ describe.each(backends)("%s backend", (kind) => {
     expect(gateway?.hosted).toBe(true);
   });
 
+  it("counts accounts made after the start among the gateways a runner covers", async () => {
+    const env = {
+      BOTT_HOSTED: "1",
+      BOTT_INSTANCE: "cd".repeat(16),
+      BOTT_STATE_DIR: folder(),
+      BOTT_ORIGIN: "https://bott.example.test",
+      BOTT_MASTER_KEY: KEY,
+      BOTT_GOOGLE_CLIENT_ID: "client",
+      BOTT_GOOGLE_CLIENT_SECRET: "secret",
+      BOTT_ALLOWED_EMAILS: "alice@example.test,bob@example.test",
+    };
+    const server = await start(env);
+    const accounts = server.accounts;
+    if (!accounts) throw new Error("no account store");
+    expect(await server.gateways()).toEqual([]);
+    await accounts.signIn("alice-subject", "alice@example.test", null);
+    expect(await server.gateways()).toHaveLength(1);
+    await accounts.signIn("bob-subject", "bob@example.test", null);
+    const both = await server.gateways();
+    expect(new Set(both.map((gateway) => gateway.store.ctx.instance)).size).toBe(2);
+  });
+
   it("refuses Google mode without the settings it needs", async () => {
     // A server that cannot start closes the database it was given.
     const base = { BOTT_AUTH: "google", BOTT_STATE_DIR: folder(), BOTT_MASTER_KEY: KEY };

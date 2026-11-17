@@ -43,7 +43,8 @@ export interface Server {
   readonly accounts: AccountStore | null;
   /**
    * The gateways whose scheduled work a runner owns: this machine's one in token mode, and in
-   * Google mode one for every account still allowed to sign in.
+   * Google mode one for every account that exists and is allowed to sign in at the time of
+   * asking, so accounts made or removed since the last call are counted in or out.
    */
   gateways(): Promise<Gateway[]>;
   close(): Promise<void>;
@@ -201,10 +202,7 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       db,
       handler,
       accounts: store,
-      gateways: async () => {
-        await built.runtimes.start();
-        return built.runtimes.all();
-      },
+      gateways: () => built.runtimes.current(),
       close: async () => {
         await built.close();
         await opened.close();
