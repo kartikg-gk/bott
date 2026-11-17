@@ -10,7 +10,7 @@ import { FakeD1 } from "../support/fakeD1.ts";
 import { allRows, SHARED_FIXTURE, stepBack } from "./olderFile.ts";
 
 /** The versions a file can be found at and still be brought to 21 here. */
-const OLDER = [19, 20];
+const OLDER = [18, 19, 20];
 
 type Row = Record<string, unknown>;
 

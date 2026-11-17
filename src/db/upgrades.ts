@@ -15,6 +15,19 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** Notes and skill files for hosted bots, whose folders do not outlast a request. */
+const hostedFiles: Upgrade = {
+  reaches: 19,
+  statements: () => [
+    "CREATE TABLE IF NOT EXISTS bot_memory(instance TEXT NOT NULL, bot TEXT NOT NULL, " +
+      "file TEXT NOT NULL, content TEXT NOT NULL, updated REAL NOT NULL, " +
+      "PRIMARY KEY(instance,bot,file))",
+    "CREATE TABLE IF NOT EXISTS skill_files(instance TEXT NOT NULL, scope TEXT NOT NULL, " +
+      "skill TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, revision TEXT NOT NULL, " +
+      "PRIMARY KEY(instance,scope,skill,path))",
+  ],
+};
+
 /** Named leases that stand in for file locks when several processes share one database. */
 const leases: Upgrade = {
   reaches: 20,
@@ -34,7 +47,7 @@ const runContext: Upgrade = {
 };
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
-export const UPGRADES: readonly Upgrade[] = [leases, runContext];
+export const UPGRADES: readonly Upgrade[] = [hostedFiles, leases, runContext];
 
 /** The oldest schema version a file can be at and still be brought up to date here. */
 export function oldestUpgradable(): number {
