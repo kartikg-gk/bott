@@ -5,6 +5,7 @@ import type { StoreContext } from "./context.js";
 import * as inbox from "./inbox.js";
 import { recoveryStatements } from "./recovery.js";
 import * as routes from "./routes.js";
+import * as work from "./work.js";
 
 const CHIEF_NAME = "Chief of Staff";
 const CHIEF_ROLE = "The main bot for this person.";
@@ -14,6 +15,7 @@ const DAY = 86400;
 export type { Approval, Decision, InboxItem, InboxStatus, TaskNotice } from "./inbox.js";
 export { REPORT_IDS, WEB_IDS } from "./inbox.js";
 export type { Route } from "./routes.js";
+export type { Task } from "./work.js";
 
 export interface StoreOptions {
   retentionDays?: number;
@@ -161,6 +163,34 @@ export class Store {
 
   takeUnreported(opts?: { chat?: number }) {
     return inbox.takeUnreported(this.ctx, opts);
+  }
+
+  addTask(t: Omit<work.Task, "id" | "status" | "answer">) {
+    return work.addTask(this.ctx, t);
+  }
+
+  task(id: number) {
+    return work.task(this.ctx, id);
+  }
+
+  tasks(limit = 20) {
+    return work.tasks(this.ctx, limit);
+  }
+
+  runningTasks() {
+    return work.runningTasks(this.ctx);
+  }
+
+  finishTask(id: number, status: work.Task["status"], answer: string | null) {
+    return work.finishTask(this.ctx, id, status, answer);
+  }
+
+  beginDelegation(route: routes.Route, bot: string, task: string) {
+    return work.beginDelegation(this.ctx, route, bot, task);
+  }
+
+  finishDelegation(id: number, status: string, answer: string | null) {
+    return work.finishDelegation(this.ctx, id, status, answer);
   }
 
   async recover(): Promise<void> {
