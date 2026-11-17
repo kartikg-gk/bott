@@ -9,7 +9,7 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { AccountStore } from "../src/accounts/store.ts";
 import { AppConnections } from "../src/apps/connections.ts";
 import { TelegramLinks } from "../src/apps/telegram.ts";
@@ -24,6 +24,7 @@ import { nextRun } from "../src/schedule/when.ts";
 import { WEB_CHAT } from "../src/store/store.ts";
 import { createApp } from "../src/web/app.ts";
 import { Gateway } from "../src/web/gateway.ts";
+import { upgradedCopy } from "./db/olderFile.ts";
 import { KEY } from "./support/accounts.ts";
 import { type Backend, backends, FakeD1 } from "./support/fakeD1.ts";
 import { fakeProvider } from "./support/fakeProvider.ts";
@@ -60,7 +61,24 @@ const SETTLED = [
   "job_event_receipts",
 ];
 
-describe("a database file written before the switch", () => {
+/**
+ * The file as written, then copies of it stepped back to older schemas and upgraded here before
+ * the same checks run, so an upgraded file must behave like one written at 21.
+ */
+const SOURCES = [SCHEMA_VERSION, 20];
+
+describe.each(SOURCES)("a database file written before the switch, from schema %i", (version) => {
+  let source = FIXTURE;
+  let upgradeFolder: string | null = null;
+  beforeAll(async () => {
+    if (version === SCHEMA_VERSION) return;
+    upgradeFolder = mkdtempSync(join(tmpdir(), "shared-upgraded-"));
+    source = await upgradedCopy(upgradeFolder, version);
+  });
+  afterAll(() => {
+    if (upgradeFolder) rmSync(upgradeFolder, { recursive: true, force: true });
+  });
+
   const cleanups: (() => Promise<void> | void)[] = [];
   afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) await cleanup();
@@ -76,7 +94,7 @@ describe("a database file written before the switch", () => {
   function copy(kind: Backend = "sqlite"): { db: Database; root: string } {
     const root = folder();
     const path = join(root, "gateway.sqlite3");
-    copyFileSync(FIXTURE, path);
+    copyFileSync(source, path);
     if (kind === "sqlite") {
       const db = new SqliteDatabase(path);
       cleanups.unshift(() => db.close());

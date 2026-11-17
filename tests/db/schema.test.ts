@@ -99,11 +99,7 @@ describe("sqlite file", () => {
     expect(await db.query("PRAGMA user_version")).toEqual([{ user_version: 21 }]);
   });
 
-  it("refuses a schema it cannot upgrade", async () => {
-    const older = new SqliteDatabase(":memory:");
-    dbs.push(older);
-    await older.run("PRAGMA user_version = 3");
-    await expect(ensureSchema(older)).rejects.toThrow("This database needs upgrading to schema 21");
+  it("refuses a schema newer than its own", async () => {
     const newer = new SqliteDatabase(":memory:");
     dbs.push(newer);
     await newer.run("PRAGMA user_version = 22");

@@ -1,6 +1,8 @@
+import { basename, dirname, extname, join } from "node:path";
 import type { Database } from "./database.js";
 import { SCHEMA_SQL } from "./schemaSql.js";
 import { SqliteDatabase } from "./sqlite.js";
+import { applyUpgrades, oldestUpgradable } from "./upgrades.js";
 
 export const SCHEMA_VERSION = 21;
 
@@ -25,37 +27,78 @@ async function create(db: Database): Promise<void> {
   }
 }
 
-async function checkSqliteVersion(db: Database): Promise<boolean> {
-  const version = Number((await db.query("PRAGMA user_version"))[0]?.user_version ?? 0);
-  if (version > SCHEMA_VERSION) throw new Error("This database was written by a later version of bott; update bott to open it");
-  if (version === SCHEMA_VERSION) return false;
-  const existing = await db.query(
-    "SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
-  );
-  if (version !== 0 || Number(existing[0]?.n) > 0) {
-    throw new Error(`This database needs upgrading to schema ${SCHEMA_VERSION}`);
-  }
-  return true;
+async function mark(db: Database): Promise<void> {
+  await db.run(MIGRATIONS_TABLE);
+  await db.run("INSERT OR IGNORE INTO schema_migrations (id) VALUES (?)", [MARKER]);
 }
 
 /**
- * Brings the database to schema 21 and is safe to repeat. A SQLite file already at schema 21
- * opens as it is; older files must be upgraded first.
+ * Copies the file aside before its first upgrade step, as `<name>.before-v21-<ms><ext>` in the
+ * same folder, so a step that goes wrong never costs the only copy.
  */
-export async function ensureSchema(db: Database): Promise<void> {
-  const local = db instanceof SqliteDatabase;
-  // A file already at 21 has its tables; anything else reaching here is empty.
-  const needsCreate = local ? await checkSqliteVersion(db) : true;
+async function keepCopy(file: SqliteDatabase): Promise<void> {
+  if (file.path === "" || file.path === ":memory:") return;
+  const ext = extname(file.path);
+  const stem = basename(file.path, ext);
+  const target = join(
+    dirname(file.path),
+    `${stem}.before-v${SCHEMA_VERSION}-${Date.now()}${ext || ".sqlite3"}`,
+  );
+  await file.copyTo(target);
+}
+
+/**
+ * A local file says its version in `user_version`. An empty file gets the whole schema; a file
+ * from schema 1 to 20 is copied aside, then upgraded one step at a time. Markers that older
+ * builds left in `schema_migrations` stay and are not checked here.
+ */
+async function ensureFile(file: SqliteDatabase): Promise<void> {
+  const version = Number((await file.query("PRAGMA user_version"))[0]?.user_version ?? 0);
+  if (version > SCHEMA_VERSION) throw new Error("This database was written by a later version of bott; update bott to open it");
+  if (version === 0) {
+    const existing = await file.query(
+      "SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+    );
+    if (Number(existing[0]?.n) > 0) {
+      throw new Error("This database has tables but no schema version, so it cannot be upgraded");
+    }
+    await create(file);
+    await file.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  } else if (version < SCHEMA_VERSION) {
+    if (version < oldestUpgradable()) {
+      throw new Error(
+        `This database is at schema ${version}; the oldest this gateway upgrades is ` +
+          `${oldestUpgradable()}`,
+      );
+    }
+    await keepCopy(file);
+    await applyUpgrades(file, version);
+  }
+  await mark(file);
+}
+
+/**
+ * A hosted database cannot report `user_version`, so its markers say what it holds. One with
+ * the current marker is left alone and one with no marker gets the whole schema. One that an
+ * older build set up is refused: there is no upgrade for hosted databases. Upgrade the local
+ * file instead (open it here once) and import it with `db import`.
+ */
+async function ensureHosted(db: Database): Promise<void> {
   await db.run(MIGRATIONS_TABLE);
   const applied = (await db.query("SELECT id FROM schema_migrations")).map((row) => String(row.id));
-  if (!local && applied.includes(MARKER)) return;
-  const earlier = applied.filter((id) => id.startsWith("gateway-") && id !== MARKER).sort();
+  if (applied.includes(MARKER)) return;
+  const earlier = applied.filter((id) => id.startsWith("gateway-")).sort();
   if (earlier.length > 0) {
     throw new Error(
       `Hosted database is at ${earlier.at(-1)}; upgrading it to ${MARKER} is not supported yet`,
     );
   }
-  if (needsCreate) await create(db);
-  if (local && needsCreate) await db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-  await db.run("INSERT OR IGNORE INTO schema_migrations (id) VALUES (?)", [MARKER]);
+  await create(db);
+  await mark(db);
+}
+
+/** Brings the database to schema 21. Safe to repeat. */
+export async function ensureSchema(db: Database): Promise<void> {
+  if (db instanceof SqliteDatabase) await ensureFile(db);
+  else await ensureHosted(db);
 }
