@@ -18,7 +18,7 @@ export { REPORT_IDS, WEB_IDS } from "./inbox.js";
 export type { Job, JobChanges, NewJob, NextRun } from "./jobs.js";
 export { MAX_ACTIVE_JOBS, MISSED_GRACE } from "./jobs.js";
 export type { Route } from "./routes.js";
-export type { Task, WorkStatus } from "./work.js";
+export type { DelegationStatus, Task, WorkStatus } from "./work.js";
 
 export interface StoreOptions {
   retentionDays?: number;
@@ -192,7 +192,7 @@ export class Store {
     return work.beginDelegation(this.ctx, route, bot, task);
   }
 
-  finishDelegation(id: number, status: work.WorkStatus, answer: string | null) {
+  finishDelegation(id: number, status: work.DelegationStatus, answer: string | null) {
     return work.finishDelegation(this.ctx, id, status, answer);
   }
 

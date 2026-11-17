@@ -2,8 +2,11 @@ import { ConstraintError, type Row } from "../db/database.js";
 import type { StoreContext } from "./context.js";
 import type { Route } from "./routes.js";
 
-/** How work ends. Anything but "running" is final. */
-export type WorkStatus = "done" | "failed" | "cancelled" | "interrupted" | "timed_out";
+/** How a task or delegation ends. Anything but "running" is final. */
+export type WorkStatus = "completed" | "failed" | "cancelled" | "interrupted" | "timed_out";
+
+/** A delegation can also end with its answer finished but not delivered. */
+export type DelegationStatus = WorkStatus | "delivery_failed";
 
 export interface Task {
   id: number;
@@ -127,7 +130,7 @@ export async function beginDelegation(
 export async function finishDelegation(
   ctx: StoreContext,
   id: number,
-  status: WorkStatus,
+  status: DelegationStatus,
   answer: string | null,
 ): Promise<boolean> {
   const changed = await ctx.db.run(
