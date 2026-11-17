@@ -269,6 +269,33 @@ export async function finishJob(
   return true;
 }
 
+/**
+ * Hands back a claim whose run never started, so the job waits for a later claim and records no
+ * run. Only the claim made at `claimedAt` is handed back. The job is due again at `due`, a one-off
+ * the claim ended is live again, and an event job's wake-up goes back in the queue. A job
+ * cancelled meanwhile stays cancelled.
+ */
+export async function releaseJob(
+  ctx: StoreContext,
+  id: number,
+  claimedAt: number,
+  due: number | null,
+): Promise<boolean> {
+  const changed = await ctx.db.run(
+    "UPDATE jobs SET running=0,next_run=CASE WHEN status='cancelled' THEN next_run ELSE ? END," +
+      "status=CASE WHEN status='done' THEN 'active' ELSE status END,version=version+1 " +
+      "WHERE instance=? AND id=? AND running=1 AND last_run=?",
+    [due, ctx.instance, id, claimedAt],
+  );
+  if (changed === 0) return false;
+  await ctx.db.run(
+    "UPDATE job_wakeups SET status='queued',claimed=NULL WHERE instance=? AND job=? " +
+      "AND claimed=? AND status='running'",
+    [ctx.instance, id, claimedAt],
+  );
+  return true;
+}
+
 export async function setJobPaused(
   ctx: StoreContext,
   id: number,

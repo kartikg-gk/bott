@@ -303,14 +303,15 @@ export class SessionManager {
 
   /**
    * Runs a background task on the bot's saved session and saves it afterwards, as a delegation
-   * does. A read-only run is given only the tools that change nothing. Aborting `signal` stops
-   * the run. Throws `BotBusy` when the bot is already working.
+   * does. A read-only run is given only the tools that change nothing. Without a policy the
+   * gateway's own applies. Aborting `signal` stops the run. Throws `BotBusy` when the bot is
+   * already working.
    */
   async background(
     route: Route,
     bot: Pick<Bot, "id">,
     task: string,
-    opts: PromptOptions & { policy: Policy; readOnly: boolean; signal: AbortSignal },
+    opts: PromptOptions & { policy?: Policy | undefined; readOnly: boolean; signal: AbortSignal },
   ): Promise<Answer> {
     const target = await this.store.bot(bot.id);
     if (!target) throw new Error("The bot was deleted");

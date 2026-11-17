@@ -140,3 +140,12 @@ export async function finishDelegation(
   );
   return changed > 0;
 }
+
+/** Removes a delegation that never started its run, so it leaves no record. */
+export async function dropDelegation(ctx: StoreContext, id: number): Promise<boolean> {
+  const changed = await ctx.db.run(
+    "DELETE FROM delegations WHERE instance=? AND id=? AND status='running'",
+    [ctx.instance, id],
+  );
+  return changed > 0;
+}

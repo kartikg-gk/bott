@@ -241,6 +241,10 @@ export class Store {
     return work.finishDelegation(this.ctx, id, status, answer);
   }
 
+  dropDelegation(id: number) {
+    return work.dropDelegation(this.ctx, id);
+  }
+
   addJob(j: jobs.NewJob) {
     return jobs.addJob(this.ctx, j);
   }
@@ -267,6 +271,10 @@ export class Store {
     opts?: { claimedAt?: number; next?: number | null },
   ) {
     return jobs.finishJob(this.ctx, id, status, answer ?? null, opts);
+  }
+
+  releaseJob(id: number, claimedAt: number, due: number | null) {
+    return jobs.releaseJob(this.ctx, id, claimedAt, due);
   }
 
   setJobPaused(id: number, actor: number, paused: boolean) {
