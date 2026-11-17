@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "../db/database.js";
 import { ensureSchema } from "../db/schema.js";
 import type { StoreContext } from "./context.js";
+import * as inbox from "./inbox.js";
 import { recoveryStatements } from "./recovery.js";
 import * as routes from "./routes.js";
 
@@ -10,6 +11,8 @@ const CHIEF_ROLE = "The main bot for this person.";
 const APPROVAL_DAYS = 30;
 const DAY = 86400;
 
+export type { Approval, Decision, InboxItem, InboxStatus } from "./inbox.js";
+export { REPORT_IDS, WEB_IDS } from "./inbox.js";
 export type { Route } from "./routes.js";
 
 export interface StoreOptions {
@@ -105,6 +108,59 @@ export class Store {
 
   history(chat: number, user: number, limit = 100) {
     return routes.history(this.ctx, chat, user, limit);
+  }
+
+  admitWeb(
+    chat: number,
+    user: number,
+    text: string,
+    opts?: { route?: routes.Route; run?: string },
+  ) {
+    return inbox.admitWeb(this.ctx, chat, user, text, opts);
+  }
+
+  pending() {
+    return inbox.pending(this.ctx);
+  }
+
+  mark(item: inbox.InboxItem, status: inbox.InboxStatus, run?: string) {
+    return inbox.mark(this.ctx, item, status, run);
+  }
+
+  isPending(item: inbox.InboxItem) {
+    return inbox.isPending(this.ctx, item);
+  }
+
+  items() {
+    return inbox.items(this.ctx);
+  }
+
+  clearRouteQueue(route: routes.Route) {
+    return inbox.clearRouteQueue(this.ctx, route);
+  }
+
+  replacePrompt(item: inbox.InboxItem, text: string) {
+    return inbox.replacePrompt(this.ctx, item, text);
+  }
+
+  finishRun(chat: number, user: number, thread: number, run: string, status: inbox.InboxStatus) {
+    return inbox.finishRun(this.ctx, chat, user, thread, run, status);
+  }
+
+  addApproval(a: inbox.Approval) {
+    return inbox.addApproval(this.ctx, a);
+  }
+
+  decide(id: string, allow: boolean, source: string) {
+    return inbox.decide(this.ctx, id, allow, source);
+  }
+
+  addReport(taskId: number, text: string) {
+    return inbox.addReport(this.ctx, taskId, text);
+  }
+
+  takeUnreported(opts?: { chat?: number }) {
+    return inbox.takeUnreported(this.ctx, opts);
   }
 
   async recover(): Promise<void> {

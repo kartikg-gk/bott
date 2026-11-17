@@ -65,6 +65,19 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await db.run("INSERT INTO t VALUES (1)");
     await expect(db.run("INSERT INTO t VALUES (1)")).rejects.toBeInstanceOf(ConstraintError);
   });
+
+  it("bigint params round trip on both backends", async () => {
+    const { db } = fresh();
+    const big = 2n ** 60n + 1n;
+    await db.run("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)");
+    await db.run("INSERT INTO t VALUES (?, ?)", [big, "x"]);
+    await db.run("INSERT INTO t VALUES (?, ?)", [big + 1n, "y"]);
+    const rows = await db.query("SELECT CAST(id AS TEXT) AS id, v FROM t WHERE id = ?", [big]);
+    expect(rows).toEqual([{ id: big.toString(), v: "x" }]);
+    expect(BigInt(String(rows[0]?.id))).toBe(big);
+    const next = await db.query("SELECT CAST(max(id) + 1 AS TEXT) AS id FROM t");
+    expect(BigInt(String(next[0]?.id))).toBe(big + 2n);
+  });
 });
 
 describe("inlineNulls", () => {

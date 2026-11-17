@@ -1,7 +1,8 @@
 import { D1Database } from "./d1.js";
 import { SqliteDatabase } from "./sqlite.js";
 
-export type Param = string | number | boolean | null | Uint8Array;
+/** A bigint binds natively on SQLite and as decimal text on D1, so IDs above 2^53 stay exact. */
+export type Param = string | number | bigint | boolean | null | Uint8Array;
 export type Row = Record<string, unknown>;
 
 export interface Database {

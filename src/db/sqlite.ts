@@ -7,7 +7,7 @@ const BUSY_TIMEOUT_MS = 30_000;
 
 function bindable(value: Param): string | number | bigint | Buffer {
   if (typeof value === "boolean") return value ? 1 : 0;
-  return value as string | number;
+  return value as string | number | bigint;
 }
 
 /** A SQLite file. better-sqlite3 is synchronous, so methods are async only by interface. */
