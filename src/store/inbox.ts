@@ -230,6 +230,9 @@ export async function replacePrompt(
     "UPDATE inbox SET text=?,status='prompt',version=version+1 WHERE instance=? AND id=?",
     [text, ctx.instance, item.id],
   );
+  // `mark` checks the status it is given, so the caller's copy must follow the row.
+  item.text = text;
+  item.status = "prompt";
 }
 
 /** Settles the running items of one run in one conversation. */

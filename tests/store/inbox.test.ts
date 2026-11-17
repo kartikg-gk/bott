@@ -146,6 +146,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await store.mark(item, "dispatching");
     await store.replacePrompt(item, "/later");
     expect(await store.items()).toEqual([{ ...item, text: "/later", status: "prompt" }]);
+    expect(item).toMatchObject({ text: "/later", status: "prompt" });
+    // The item handed back follows the row, so the next move from "prompt" is allowed.
+    expect(await store.mark(item, "dispatching")).toBe(true);
   });
 
   it("finishing a run marks only that run's items", async () => {
