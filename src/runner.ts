@@ -41,6 +41,8 @@ export interface RunnerOptions {
   workers?: number;
   /** Stops a runner that is not running once; its running jobs end interrupted. */
   signal?: AbortSignal;
+  /** Runs each job's model work, as the instance's per-run spend and request limits need. */
+  wrap?: <T>(work: () => Promise<T>) => Promise<T>;
 }
 
 /** Why a run was stopped before it ended by itself. */
@@ -79,7 +81,7 @@ export async function runRunner(opts: RunnerOptions): Promise<void> {
 }
 
 /** One instance a runner can cover: its store, sessions and where answers go. */
-export type RunnerTarget = Pick<RunnerOptions, "store" | "sessions" | "sink" | "instance">;
+export type RunnerTarget = Pick<RunnerOptions, "store" | "sessions" | "sink" | "instance" | "wrap">;
 
 export interface RunnersOptions extends Pick<RunnerOptions, "once" | "poll" | "ttl" | "workers"> {
   /** The instances that should be covered now; asked again every `refresh` seconds. */
@@ -325,11 +327,14 @@ class Runner {
         delegation = await store.beginDelegation(route, bot.id, job.task);
         if (delegation === null) throw new BotBusy();
       }
-      const result = await sessions.background(route, bot, job.task, {
-        readOnly: false,
-        signal: running.controller.signal,
-        unattended: true,
-      });
+      const conversation = route;
+      const work = () =>
+        sessions.background(conversation, bot, job.task, {
+          readOnly: false,
+          signal: running.controller.signal,
+          unattended: true,
+        });
+      const result = await (this.opts.wrap ? this.opts.wrap(work) : work());
       answer = result.text;
       status = running.reason ?? result.outcome;
       // A stopped run tells nobody: a cancel was asked for, and an interrupt is recorded.

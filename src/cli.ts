@@ -16,6 +16,7 @@ import { type Config, ConfigError, type Env, PROVIDER_KEYS, readConfig } from ".
 import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { databaseStatus, SCHEMA_MARK } from "./db/status.ts";
 import { checkDatabase, ImportError, importLocal } from "./db/transfer.ts";
+import type { ModelLimits } from "./limits/limits.ts";
 import { runRunners } from "./runner.ts";
 import type { ProviderFactory } from "./runtime/sessions.ts";
 import { serveNode } from "./server.ts";
@@ -125,6 +126,12 @@ async function run(io: Io, config: Config, args: string[]): Promise<number> {
   return 0;
 }
 
+/** Runs work as one operation under the limits, so it gets one run's budget. */
+const limitedBy =
+  (limits: ModelLimits) =>
+  <T>(work: () => Promise<T>): Promise<T> =>
+    limits.operation(() => work());
+
 async function runner(io: Io, config: Config, args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { once: { type: "boolean" } } });
   const server = await startServer(config, {
@@ -143,6 +150,8 @@ async function runner(io: Io, config: Config, args: string[]): Promise<number> {
         sessions: gateway.sessions,
         sink: gateway.channel,
         instance: gateway.store.ctx.instance,
+        // Each job is one run for the per-run limits, as a web run is.
+        ...(gateway.limits ? { wrap: limitedBy(gateway.limits) } : {}),
       }));
     };
     await runRunners({

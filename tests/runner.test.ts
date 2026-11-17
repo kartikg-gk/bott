@@ -499,7 +499,7 @@ describe("covering several instances", () => {
   });
 
   /** One instance with its own database, a due job, and a model that answers `text`. */
-  async function instance(name: string, text: string) {
+  async function instance(name: string, text: string, onCall: () => void = () => {}) {
     const { db } = database("sqlite");
     open.push(db);
     const store = await Store.open(db, name, { clock: () => NOW });
@@ -518,6 +518,7 @@ describe("covering several instances", () => {
       (): ModelProvider => ({
         id: "fake",
         async *stream() {
+          onCall();
           yield* reply(text);
         },
       }),
@@ -565,6 +566,23 @@ describe("covering several instances", () => {
     stop.abort();
     await done;
     expect(await second.db.query("SELECT * FROM leases")).toEqual([]);
+  });
+
+  it("runs each job inside the instance's wrapper, where per-run limits are kept", async () => {
+    let inside = 0;
+    const seen: number[] = [];
+    const first = await instance("first", "first done", () => seen.push(inside));
+    const wrap = async <T>(work: () => Promise<T>): Promise<T> => {
+      inside++;
+      try {
+        return await work();
+      } finally {
+        inside--;
+      }
+    };
+    await runRunners({ targets: async () => [{ ...first, wrap }], once: true, poll: POLL });
+    expect(seen).toEqual([1]);
+    expect(inside).toBe(0);
   });
 
   it("runs once over every instance listed at the start", async () => {

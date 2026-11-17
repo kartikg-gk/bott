@@ -48,6 +48,8 @@ describe.each(backends)("%s backend", (kind) => {
     const gateways = await server.gateways();
     expect(gateways).toHaveLength(1);
     expect(gateways[0]?.store.ctx.instance).toBe(readConfig({ BOTT_STATE_DIR: root }).instance);
+    // A runner puts each job inside these limits, as the web puts each run.
+    expect(gateways[0]?.limits).toBeDefined();
   });
 
   it("refuses to start in token mode without a long enough token", async () => {

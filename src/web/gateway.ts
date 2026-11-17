@@ -68,6 +68,8 @@ export class Gateway {
     readonly learning: MemoryRuntime | undefined,
     /** Bot notes and skills, kept in the database when hosted. */
     readonly folders: FolderMirror,
+    /** Request and spend limits, when set; a run outside the web goes inside `limits.operation`. */
+    readonly limits: ModelLimits | undefined,
   ) {}
 
   static async open(opts: GatewayOptions): Promise<Gateway> {
@@ -149,6 +151,7 @@ export class Gateway {
       new MemoryControls(store, memory, project),
       learning,
       folders,
+      limits,
     );
   }
 
