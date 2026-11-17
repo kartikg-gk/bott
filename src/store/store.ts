@@ -315,7 +315,8 @@ export class Store {
 
   /** Drops text and rows older than the retention period; returns how many rows changed. */
   async retain(days?: number): Promise<number> {
-    const keep = days ?? this.retentionDays;
+    // No period, or 0, means the stored one, as an unset option would.
+    const keep = days || this.retentionDays;
     if (!keep) return 0;
     const { db, instance, clock } = this.ctx;
     const now = clock();

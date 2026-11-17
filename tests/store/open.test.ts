@@ -177,6 +177,16 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await store.retain()).toBe(0);
   });
 
+  it("retain(0) keeps to the stored period rather than skipping", async () => {
+    const db = fresh();
+    const store = await Store.open(db, "main", { clock, retentionDays: 7 });
+    await db.run(
+      "INSERT INTO approvals(instance,id,created,decision) VALUES ('main','old',?,'allowed')",
+      [NOW - 40 * DAY],
+    );
+    expect(await store.retain(0)).toBe(1);
+  });
+
   it("retain does nothing without a retention period", async () => {
     const store = await Store.open(fresh(), "main", { clock });
     expect(await store.retain()).toBe(0);
