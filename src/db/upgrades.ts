@@ -15,6 +15,15 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** Named leases that stand in for file locks when several processes share one database. */
+const leases: Upgrade = {
+  reaches: 20,
+  statements: () => [
+    "CREATE TABLE IF NOT EXISTS leases(name TEXT PRIMARY KEY, owner TEXT NOT NULL, " +
+      "expires REAL NOT NULL)",
+  ],
+};
+
 /** Earlier messages a browser sent along with a hosted run, held until the run starts. */
 const runContext: Upgrade = {
   reaches: 21,
@@ -25,7 +34,7 @@ const runContext: Upgrade = {
 };
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
-export const UPGRADES: readonly Upgrade[] = [runContext];
+export const UPGRADES: readonly Upgrade[] = [leases, runContext];
 
 /** The oldest schema version a file can be at and still be brought up to date here. */
 export function oldestUpgradable(): number {
