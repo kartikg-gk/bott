@@ -11,11 +11,14 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await Promise.all(open.splice(0).map((db) => db.close()));
   });
 
-  async function fresh(): Promise<{ store: Store; db: Database }> {
+  const OWNER = "runner-owner";
+  async function fresh(hold = true): Promise<{ store: Store; db: Database }> {
     const { db } = database(kind);
     open.push(db);
     now = 1_800_000_000;
-    return { store: await Store.open(db, "main", { clock }), db };
+    const store = await Store.open(db, "main", { clock });
+    if (hold) await store.holdScheduler(OWNER, 86_400);
+    return { store, db };
   }
 
   const job = (over: Partial<Parameters<Store["addJob"]>[0]> = {}) => ({
@@ -30,6 +33,8 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     ...over,
   });
   const hourly = (_spec: string, after: number) => after + 3600;
+  const claim = (store: Store, opts: Partial<Parameters<Store["claimDue"]>[1]> = {}) =>
+    store.claimDue(now, { owner: OWNER, next: hourly, ...opts });
 
   it("due jobs are claimed and marked running", async () => {
     const { store } = await fresh();
@@ -52,12 +57,16 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       lastRun: null,
       lastAnswer: null,
     });
-    const claimed = await store.claimDue(now);
+    const claimed = await claim(store);
     expect(claimed.map((j) => j.id)).toEqual([due]);
-    expect(claimed[0]).toMatchObject({ running: true, lastRun: now });
-    expect(await store.job(due)).toMatchObject({ running: true, lastRun: now });
+    expect(claimed[0]).toMatchObject({ running: true, lastRun: now, nextRun: now + 3600 });
+    expect(await store.job(due)).toMatchObject({
+      running: true,
+      lastRun: now,
+      nextRun: now + 3600,
+    });
     expect(await store.job(later)).toMatchObject({ running: false, lastRun: null });
-    expect(await store.claimDue(now)).toEqual([]);
+    expect(await claim(store)).toEqual([]);
 
     now += 5;
     expect(
@@ -70,21 +79,22 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       lastAnswer: "all good",
       nextRun: now + 3600,
     });
-    expect(await store.claimDue(now)).toEqual([]);
+    expect(await claim(store)).toEqual([]);
   });
 
   it("only jobs in the given chat are claimed", async () => {
     const { store } = await fresh();
     await store.addJob(job({ chat: 7 }));
     const mine = await store.addJob(job({ chat: 8 }));
-    expect((await store.claimDue(now, { chat: 8 })).map((j) => j.id)).toEqual([mine]);
+    expect((await claim(store, { chat: 8 })).map((j) => j.id)).toEqual([mine]);
   });
 
   it("a one-off job is done once it finishes without a next time", async () => {
     const { store } = await fresh();
     const id = await store.addJob(job({ spec: "at:once" }));
-    await store.claimDue(now);
-    expect(await store.finishJob(id, "completed", "x", { claimedAt: now, next: null })).toBe(true);
+    const [claimed] = await claim(store, { next: () => null });
+    expect(claimed).toMatchObject({ status: "done", nextRun: null, running: true });
+    expect(await store.finishJob(id, "completed", "x", { claimedAt: now })).toBe(true);
     expect(await store.job(id)).toMatchObject({ status: "done", nextRun: null, running: false });
     expect(await store.jobs({ actor: 3 })).toEqual([]);
     expect((await store.jobs({ actor: 3, history: true })).map((j) => j.id)).toEqual([id]);
@@ -94,7 +104,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const { store, db } = await fresh();
     const other = await Store.open(db, "main", { clock, recover: false });
     const ids = [await store.addJob(job({ bot: "x" })), await store.addJob(job({ bot: "y" }))];
-    const [a, b] = await Promise.all([store.claimDue(now), other.claimDue(now)]);
+    const [a, b] = await Promise.all([claim(store), claim(other)]);
     const all = [...a, ...b].map((j) => j.id).sort();
     expect(all).toEqual(ids.sort());
     const rows = await db.query("SELECT running,version FROM jobs ORDER BY id");
@@ -110,7 +120,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const runs = await store.addJob(job({ bot: "r", first: late }));
     const skips = await store.addJob(job({ bot: "s", first: late, missed: "skip" }));
     const recent = await store.addJob(job({ bot: "t", first: now - 60, missed: "skip" }));
-    const claimed = await store.claimDue(now, { next: hourly });
+    const claimed = await claim(store, { next: hourly });
     expect(claimed.map((j) => j.id).sort()).toEqual([runs, recent].sort());
     expect(await store.job(skips)).toMatchObject({
       running: false,
@@ -120,13 +130,13 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       nextRun: now + 3600,
       status: "active",
     });
-    expect(await store.claimDue(now, { next: hourly })).toEqual([]);
+    expect(await claim(store, { next: hourly })).toEqual([]);
   });
 
   it("a skipped one-off job is done", async () => {
     const { store } = await fresh();
     const id = await store.addJob(job({ first: now - MISSED_GRACE - 1, missed: "skip" }));
-    expect(await store.claimDue(now, { next: () => null })).toEqual([]);
+    expect(await claim(store, { next: () => null })).toEqual([]);
     expect(await store.job(id)).toMatchObject({ status: "done", lastStatus: "missed" });
   });
 
@@ -135,7 +145,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await store.addJob(job({ bot: "busy" }));
     const free = await store.addJob(job({ bot: "free" }));
     await store.addJob(job({ bot: "free" }));
-    const claimed = await store.claimDue(now, { busyBots: ["busy"] });
+    const claimed = await claim(store, { busyBots: ["busy"] });
     expect(claimed.map((j) => j.id)).toEqual([free]);
   });
 
@@ -143,20 +153,20 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const { store, db } = await fresh();
     await store.addJob(job());
     await db.run("INSERT INTO job_automation VALUES('main',0)");
-    expect(await store.claimDue(now)).toEqual([]);
+    expect(await claim(store)).toEqual([]);
   });
 
   it("event jobs claim their oldest queued wake-up", async () => {
     const { store, db } = await fresh();
     const id = await store.addJob(job({ spec: "event:mail", first: null }));
-    expect(await store.claimDue(now)).toEqual([]);
+    expect(await claim(store)).toEqual([]);
     for (const delivery of ["d1", "d2"]) {
       await db.run(
         "INSERT INTO job_wakeups(instance,actor,job,event,delivery,received) VALUES('main',3,?,?,?,?)",
         [id, "mail", delivery, now],
       );
     }
-    expect((await store.claimDue(now)).map((j) => j.id)).toEqual([id]);
+    expect((await claim(store)).map((j) => j.id)).toEqual([id]);
     const queue = "SELECT delivery,status,claimed FROM job_wakeups ORDER BY id";
     expect(await db.query(queue)).toEqual([
       { delivery: "d1", status: "running", claimed: now },
@@ -166,7 +176,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await store.finishJob(id, "completed", "ok", { claimedAt: now - 1 })).toBe(true);
     const first = (await db.query(queue))[0];
     expect(first).toMatchObject({ status: "completed" });
-    expect((await store.claimDue(now)).map((j) => j.id)).toEqual([id]);
+    expect((await claim(store)).map((j) => j.id)).toEqual([id]);
   });
 
   it("quota holds when two adds race at the limit", async () => {
@@ -225,21 +235,51 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   it("a running job cannot be edited", async () => {
     const { store } = await fresh();
     const id = await store.addJob(job());
-    await store.claimDue(now);
+    await claim(store);
     expect(await store.editJob(id, 3, { task: "mid-run" })).toBe(false);
+  });
+
+  it("a job interrupted mid-run is not replayed after recovery", async () => {
+    const { store, db } = await fresh();
+    const repeating = await store.addJob(job({ bot: "r" }));
+    const once = await store.addJob(job({ bot: "o", spec: "at:once" }));
+    const next = (spec: string, after: number) => (spec === "at:once" ? null : after + 3600);
+    expect(await claim(store, { next })).toHaveLength(2);
+    await store.releaseScheduler(OWNER);
+    const restarted = await Store.open(db, "main", { clock });
+    expect(await store.job(repeating)).toMatchObject({
+      running: false,
+      lastStatus: "interrupted",
+      nextRun: now + 3600,
+      status: "active",
+    });
+    expect(await store.job(once)).toMatchObject({ running: false, status: "done" });
+    await restarted.holdScheduler(OWNER, 60);
+    expect(await claim(restarted, { next })).toEqual([]);
+  });
+
+  it("a store that does not hold the scheduler claims nothing", async () => {
+    const { store, db } = await fresh(false);
+    const other = await Store.open(db, "main", { clock, recover: false });
+    const id = await store.addJob(job());
+    expect(await claim(store)).toEqual([]);
+    expect(await other.holdScheduler("someone-else", 30)).toBe(true);
+    expect(await claim(store)).toEqual([]);
+    expect(await store.job(id)).toMatchObject({ running: false, nextRun: now - 10 });
+    expect((await claim(other, { owner: "someone-else" })).map((j) => j.id)).toEqual([id]);
   });
 
   it("finish with a stale claimedAt changes nothing", async () => {
     const { store } = await fresh();
     const id = await store.addJob(job());
-    await store.claimDue(now);
+    await claim(store);
     expect(await store.finishJob(id, "completed", "old", { claimedAt: now - 100, next: 1 })).toBe(
       false,
     );
     expect(await store.job(id)).toMatchObject({
       running: true,
       lastStatus: null,
-      nextRun: now - 10,
+      nextRun: now + 3600,
     });
     expect(await store.finishJob(id, "failed", "real", { claimedAt: now })).toBe(true);
     expect(await store.finishJob(id, "completed", "again", { claimedAt: now })).toBe(false);
@@ -247,15 +287,18 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   });
 
   it("a held scheduler keeps running jobs through recovery", async () => {
-    const { store, db } = await fresh();
+    const { store, db } = await fresh(false);
     const id = await store.addJob(job());
     expect(await store.holdScheduler("owner-a", 30)).toBe(true);
-    await store.claimDue(now);
+    expect(await claim(store, { owner: "owner-a" })).toHaveLength(1);
     expect(await store.holdScheduler("owner-b", 30)).toBe(false);
     await Store.open(db, "main", { clock });
     expect(await store.job(id)).toMatchObject({ running: true });
 
     now += 31;
+    await Store.open(db, "main", { clock });
+    expect(await store.job(id)).toMatchObject({ running: false, lastStatus: "interrupted" });
+    await db.run("UPDATE jobs SET running=1,last_status=NULL WHERE id=?", [id]);
     expect(await store.holdScheduler("owner-b", 30)).toBe(true);
     expect(await store.job(id)).toMatchObject({ running: false, lastStatus: "interrupted" });
     expect(await store.holdScheduler("owner-a", 30)).toBe(false);

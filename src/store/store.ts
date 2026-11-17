@@ -208,7 +208,10 @@ export class Store {
     return jobs.jobs(this.ctx, opts);
   }
 
-  claimDue(now: number, opts?: { chat?: number; busyBots?: string[]; next?: jobs.NextRun }) {
+  claimDue(
+    now: number,
+    opts: { owner: string; next: jobs.NextRun; chat?: number; busyBots?: string[] },
+  ) {
     return jobs.claimDue(this.ctx, now, opts);
   }
 

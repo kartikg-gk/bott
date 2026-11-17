@@ -157,15 +157,18 @@ async function automationOn(ctx: StoreContext): Promise<boolean> {
 }
 
 /**
- * Claims the jobs due at `now` and marks them running. Each claim is one UPDATE that only lands
- * on the version this call read, so two processes never both claim a job. A busy bot gets no
- * job, and each bot gets at most one per call. A job set to skip missed runs that is more than
- * MISSED_GRACE late is not run: it moves to the time `next` gives and records the miss.
+ * Claims the jobs due at `now` for the scheduler `owner` and marks them running. Each claim is
+ * one UPDATE that only lands on the version this call read, and only while `owner` holds the live
+ * scheduler row, so two processes never both claim a job and recovery elsewhere leaves claimed
+ * jobs alone. The claim also moves a scheduled job to the time `next` gives, or ends it when
+ * `next` gives null, so a run cut short by a crash is not run again. A busy bot gets no job, and
+ * each bot gets at most one per call. A job set to skip missed runs that is more than
+ * MISSED_GRACE late is not run: it moves on and records the miss.
  */
 export async function claimDue(
   ctx: StoreContext,
   now: number,
-  opts: { chat?: number; busyBots?: string[]; next?: NextRun } = {},
+  opts: { owner: string; next: NextRun; chat?: number; busyBots?: string[] },
 ): Promise<Job[]> {
   if (!(await automationOn(ctx))) return [];
   const { db, instance } = ctx;
@@ -184,36 +187,46 @@ export async function claimDue(
     params,
   );
   const busy = new Set(opts.busyBots ?? []);
-  const guard = "WHERE instance=? AND id=? AND version=? AND running=0 AND status='active'";
+  const guard =
+    "WHERE instance=? AND id=? AND version=? AND running=0 AND status='active' AND EXISTS " +
+    "(SELECT 1 FROM scheduler_leases WHERE instance=? AND owner=? AND expires>?)";
   const claimed: Job[] = [];
   for (const row of rows) {
     const found = toJob(row);
     if (busy.has(found.bot)) continue;
-    const key: Param[] = [instance, found.id, Number(row.version)];
-    const late = found.nextRun !== null && now - found.nextRun > MISSED_GRACE;
-    if (found.missed === "skip" && late && !found.spec.startsWith(EVENT_PREFIX)) {
-      if (!opts.next) continue;
-      const upcoming = opts.next(found.spec, now);
-      await db.run(
-        "UPDATE jobs SET next_run=?,status=?,last_status='missed',last_answer=NULL," +
-          `version=version+1 ${guard}`,
-        [upcoming, upcoming === null ? "done" : "active", ...key],
-      );
-      continue;
-    }
-    const taken = await db.run(`UPDATE jobs SET running=1,last_run=?,version=version+1 ${guard}`, [
-      now,
-      ...key,
-    ]);
-    if (taken === 0) continue;
+    const key: Param[] = [instance, found.id, Number(row.version), instance, opts.owner, now];
     if (found.spec.startsWith(EVENT_PREFIX)) {
+      const taken = await db.run(
+        `UPDATE jobs SET running=1,last_run=?,version=version+1 ${guard}`,
+        [now, ...key],
+      );
+      if (taken === 0) continue;
       await db.run(
         "UPDATE job_wakeups SET status='running',claimed=? WHERE id=(SELECT id FROM job_wakeups " +
           "WHERE instance=? AND job=? AND status='queued' ORDER BY id LIMIT 1)",
         [now, instance, found.id],
       );
+      claimed.push({ ...found, running: true, lastRun: now });
+      busy.add(found.bot);
+      continue;
     }
-    claimed.push({ ...found, running: true, lastRun: now });
+    const upcoming = opts.next(found.spec, now);
+    const status = upcoming === null ? "done" : "active";
+    const late = found.nextRun !== null && now - found.nextRun > MISSED_GRACE;
+    if (found.missed === "skip" && late) {
+      await db.run(
+        "UPDATE jobs SET next_run=?,status=?,last_status='missed',last_answer=NULL," +
+          `version=version+1 ${guard}`,
+        [upcoming, status, ...key],
+      );
+      continue;
+    }
+    const taken = await db.run(
+      `UPDATE jobs SET next_run=?,status=?,running=1,last_run=?,version=version+1 ${guard}`,
+      [upcoming, status, now, ...key],
+    );
+    if (taken === 0) continue;
+    claimed.push({ ...found, nextRun: upcoming, status, running: true, lastRun: now });
     busy.add(found.bot);
   }
   return claimed;
