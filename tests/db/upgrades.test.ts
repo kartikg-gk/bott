@@ -174,10 +174,11 @@ describe("upgrading a SQLite file from an older schema", () => {
   it("leaves a file at the last step that worked when a later one fails", async () => {
     const path = olderFile(11);
     const db = new BetterSqlite3(path);
-    // The step to 13 adds this column, so finding it there already makes that step fail.
-    db.exec("ALTER TABLE jobs ADD COLUMN last_answer TEXT");
+    // The step to 13 adds a column to jobs, which fails when jobs is a view.
+    db.exec("ALTER TABLE jobs RENAME TO jobs_kept");
+    db.exec("CREATE VIEW jobs AS SELECT * FROM jobs_kept");
     db.close();
-    await expect(open(path)).rejects.toThrow(/duplicate column/);
+    await expect(open(path)).rejects.toThrow(/view/);
     const after = new BetterSqlite3(path, { readonly: true });
     try {
       expect(after.pragma("user_version", { simple: true })).toBe(12);
@@ -323,12 +324,113 @@ describe("upgrading a SQLite file from an older schema", () => {
     await unnumbered.close();
   });
 
-  it("refuses a hosted database an older build set up", async () => {
+  /** An older hosted database: the rows of a file at `version`, marked as an older build did. */
+  function hostedAt(version: number): string {
+    const path = olderFile(version);
+    const db = new BetterSqlite3(path);
+    db.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY)");
+    db.prepare("INSERT INTO schema_migrations VALUES (?)").run(`gateway-${version}`);
+    db.close();
+    return path;
+  }
+
+  /** Every table's rows from before are all still there afterwards. */
+  function expectRowsKept(before: Record<string, Row[]>, path: string, version: number): void {
+    const after = allRows(path);
+    for (const [table, rows] of Object.entries(before)) {
+      const columns = Object.keys(rows[0] ?? {});
+      const kept = asSet(after[table] ?? [], columns);
+      if (table === "session_owners" && version < 4) {
+        expect(kept, table).toEqual(expect.arrayContaining(asSet(rows, columns)));
+      } else {
+        expect(kept, table).toEqual(asSet(rows, columns));
+      }
+    }
+  }
+
+  function markers(path: string): string[] {
+    const db = new BetterSqlite3(path, { readonly: true });
+    try {
+      return (db.prepare("SELECT id FROM schema_migrations ORDER BY id").all() as Row[]).map(
+        (row) => String(row.id),
+      );
+    } finally {
+      db.close();
+    }
+  }
+
+  it.each(OLDER)(
+    "brings a hosted database at gateway-%i to 21, keeping its rows",
+    async (version) => {
+      const path = hostedAt(version);
+      const before = allRows(path);
+      const fake = new FakeD1(path);
+      await ensureSchema(fake.database());
+      await ensureSchema(fake.database());
+      fake.connection.close();
+      expect(markers(path)).toEqual([`gateway-${version}`, "gateway-21"].sort());
+      expectRowsKept(before, path, version);
+      expect(shape(path)).toEqual(await currentShape());
+    },
+  );
+
+  it.each([
+    [1, "is never answered"],
+    [1, "is carried out but its answer is lost"],
+    [17, "is never answered"],
+    [17, "is carried out but its answer is lost"],
+  ])(
+    "finishes a hosted upgrade from gateway-%i when run again after any request that %s",
+    async (version, how) => {
+      const template = hostedAt(version);
+      const before = allRows(template);
+      // How many requests a whole upgrade takes, measured on a copy.
+      copyFileSync(template, join(template, "..", "count.sqlite3"));
+      const counting = new FakeD1(join(template, "..", "count.sqlite3"));
+      await ensureSchema(counting.database());
+      counting.connection.close();
+      const total = counting.requests.length;
+      expect(total).toBeGreaterThan(5);
+      const expected = await currentShape();
+      for (let cut = 1; cut < total; cut += 1) {
+        const path = join(template, "..", `cut-${cut}.sqlite3`);
+        copyFileSync(template, path);
+        const fake = new FakeD1(path);
+        const failed = Response.json(
+          { success: false, errors: [{ message: "connection reset" }] },
+          { status: 500 },
+        );
+        fake.fault = () => {
+          const at = fake.requests.length;
+          if (at < cut) return undefined;
+          if (at === cut && how.includes("carried out")) {
+            const body = fake.requests[at - 1] as { sql: string; params: unknown[] };
+            const statement = fake.connection.prepare(body.sql);
+            if (statement.reader) statement.all(...body.params);
+            else statement.run(...body.params);
+          }
+          return failed.clone();
+        };
+        await expect(ensureSchema(fake.database()), `cut at ${cut}`).rejects.toThrow();
+        expect(markers(path), `cut at ${cut}`).not.toContain("gateway-21");
+        fake.fault = null;
+        await ensureSchema(fake.database());
+        fake.connection.close();
+        expect(markers(path), `cut at ${cut}`).toContain("gateway-21");
+        expectRowsKept(before, path, version);
+        expect(shape(path), `cut at ${cut}`).toEqual(expected);
+        rmSync(path, { force: true });
+      }
+    },
+    120_000,
+  );
+
+  it("refuses a hosted database a later build set up", async () => {
     const fake = new FakeD1();
     fake.connection.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY)");
-    fake.connection.exec("INSERT INTO schema_migrations VALUES ('gateway-20')");
+    fake.connection.exec("INSERT INTO schema_migrations VALUES ('gateway-9'),('gateway-22')");
     await expect(ensureSchema(fake.database())).rejects.toThrow(
-      "Hosted database is at gateway-20; upgrading it to gateway-21 is not supported yet",
+      "This database was written by a later version of bott; update bott to open it",
     );
     fake.connection.close();
   });

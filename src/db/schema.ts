@@ -2,11 +2,12 @@ import { basename, dirname, extname, join } from "node:path";
 import type { Database } from "./database.js";
 import { SCHEMA_SQL } from "./schemaSql.js";
 import { SqliteDatabase } from "./sqlite.js";
-import { applyUpgrades, oldestUpgradable } from "./upgrades.js";
+import { applyHostedUpgrades, applyUpgrades, oldestUpgradable } from "./upgrades.js";
 
 export const SCHEMA_VERSION = 21;
 
 const MARKER = `gateway-${SCHEMA_VERSION}`;
+const NEWER = "This database was written by a later version of bott; update bott to open it";
 const MIGRATIONS_TABLE = "CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY)";
 
 /** The create statements, one string each. */
@@ -54,8 +55,7 @@ async function keepCopy(file: SqliteDatabase): Promise<void> {
  */
 async function ensureFile(file: SqliteDatabase): Promise<void> {
   const version = Number((await file.query("PRAGMA user_version"))[0]?.user_version ?? 0);
-  if (version > SCHEMA_VERSION)
-    throw new Error("This database was written by a later version of bott; update bott to open it");
+  if (version > SCHEMA_VERSION) throw new Error(NEWER);
   if (version === 0) {
     const existing = await file.query(
       "SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
@@ -81,20 +81,32 @@ async function ensureFile(file: SqliteDatabase): Promise<void> {
 /**
  * A hosted database cannot report `user_version`, so its markers say what it holds. One with
  * the current marker is left alone and one with no marker gets the whole schema. One that an
- * older build set up is refused: there is no upgrade for hosted databases. Upgrade the local
- * file instead (open it here once) and import it with `db import`.
+ * older build set up is taken through the same steps as a local file, one request at a time,
+ * and gets the current marker only after the last of them; until then, opening it again
+ * carries on from wherever the previous attempt stopped.
  */
 async function ensureHosted(db: Database): Promise<void> {
   await db.run(MIGRATIONS_TABLE);
   const applied = (await db.query("SELECT id FROM schema_migrations")).map((row) => String(row.id));
   if (applied.includes(MARKER)) return;
-  const earlier = applied.filter((id) => id.startsWith("gateway-")).sort();
-  if (earlier.length > 0) {
+  const versions = applied
+    .map((id) => /^gateway-(\d+)$/.exec(id)?.[1])
+    .filter((found): found is string => found !== undefined)
+    .map(Number);
+  if (versions.length === 0) {
+    await create(db);
+    await mark(db);
+    return;
+  }
+  const version = Math.max(...versions);
+  if (version > SCHEMA_VERSION) throw new Error(NEWER);
+  if (version < oldestUpgradable()) {
     throw new Error(
-      `Hosted database is at ${earlier.at(-1)}; upgrading it to ${MARKER} is not supported yet`,
+      `Hosted database is at schema ${version}; the oldest this gateway upgrades is ` +
+        `${oldestUpgradable()}`,
     );
   }
-  await create(db);
+  await applyHostedUpgrades(db, version);
   await mark(db);
 }
 

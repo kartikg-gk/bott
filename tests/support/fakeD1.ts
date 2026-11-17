@@ -15,9 +15,15 @@ type Body = { sql: string; params: unknown[] };
 
 /** Answers the D1 /query endpoint from an in-memory SQLite database, with D1's response shape. */
 export class FakeD1 {
-  readonly connection = new BetterSqlite3(":memory:");
+  readonly connection: BetterSqlite3.Database;
   readonly requests: Body[] = [];
-  fault: ((request: Request) => Response | Promise<Response>) | null = null;
+  /** Answers in place of the database when it returns a response; undefined lets it answer. */
+  fault: ((request: Request) => Response | undefined | Promise<Response | undefined>) | null = null;
+
+  /** Kept in memory unless a file is named, as when a test starts from an existing database. */
+  constructor(path = ":memory:") {
+    this.connection = new BetterSqlite3(path);
+  }
 
   readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init);
@@ -27,7 +33,10 @@ export class FakeD1 {
     }
     const body = (await request.json()) as Body;
     this.requests.push(body);
-    if (this.fault) return this.fault(request);
+    if (this.fault) {
+      const answer = await this.fault(request);
+      if (answer) return answer;
+    }
     try {
       const statement = this.connection.prepare(body.sql);
       let results: Record<string, unknown>[] = [];
