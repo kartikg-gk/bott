@@ -12,7 +12,7 @@ import type { Sink } from "./runtime/sink.ts";
 import { MAX_ANSWER } from "./runtime/team.ts";
 import { nextRun } from "./schedule/when.ts";
 import type { Route } from "./store/routes.ts";
-import type { Job, Store } from "./store/store.ts";
+import type { ClaimedJob, Store } from "./store/store.ts";
 import type { DelegationStatus } from "./store/work.ts";
 
 /** How long the runner's hold lasts without renewal, in seconds. */
@@ -45,7 +45,7 @@ export interface RunnerOptions {
 type StopReason = "cancelled" | "interrupted";
 
 interface Running {
-  job: Job;
+  job: ClaimedJob;
   controller: AbortController;
   reason: StopReason | null;
   done: Promise<void>;
@@ -185,7 +185,7 @@ class Runner {
     }
   }
 
-  private launch(job: Job): void {
+  private launch(job: ClaimedJob): void {
     const running: Running = {
       job,
       controller: new AbortController(),
@@ -231,7 +231,7 @@ class Runner {
             `Job #${job.id} (${bot.name}), ${status}:\n${answer || "No answer."}`,
           );
         } catch {
-          if (status === "completed") status = "delivery_failed";
+          status = status === "completed" ? "delivery_failed" : "failed";
           await this.notify(route, `Job #${job.id} failed. It was not retried.`);
         }
       }
@@ -240,8 +240,7 @@ class Runner {
         // The bot is working elsewhere: nothing ran, so the job waits for a later look.
         if (delegation !== null) await store.dropDelegation(delegation);
         delegation = null;
-        const due = job.spec.startsWith("event:") ? job.nextRun : claimedAt;
-        if (await store.releaseJob(job.id, claimedAt, due)) return;
+        if (await store.releaseJob(job)) return;
         status = running.reason ?? "interrupted";
       } else if (running.reason !== null) {
         status = running.reason;

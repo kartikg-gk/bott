@@ -17,7 +17,7 @@ const DAY = 86400;
 export type { Bot, BotChanges } from "../bots/bots.js";
 export type { Approval, Decision, InboxItem, InboxStatus, TaskNotice } from "./inbox.js";
 export { REPORT_IDS, WEB_IDS } from "./inbox.js";
-export type { Job, JobChanges, NewJob, NextRun } from "./jobs.js";
+export type { ClaimedJob, Job, JobChanges, NewJob, NextRun } from "./jobs.js";
 export { MAX_ACTIVE_JOBS, MISSED_GRACE } from "./jobs.js";
 export type { Route } from "./routes.js";
 export type { DelegationStatus, Task, WorkStatus } from "./work.js";
@@ -273,8 +273,8 @@ export class Store {
     return jobs.finishJob(this.ctx, id, status, answer ?? null, opts);
   }
 
-  releaseJob(id: number, claimedAt: number, due: number | null) {
-    return jobs.releaseJob(this.ctx, id, claimedAt, due);
+  releaseJob(job: jobs.ClaimedJob) {
+    return jobs.releaseJob(this.ctx, job);
   }
 
   setJobPaused(id: number, actor: number, paused: boolean) {

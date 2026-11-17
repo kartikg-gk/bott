@@ -9,7 +9,7 @@ import { Lease } from "../src/db/leases.ts";
 import { runRunner } from "../src/runner.ts";
 import { type RuntimeConfig, SessionManager } from "../src/runtime/sessions.ts";
 import { receiveWakeup, wakeupHistory } from "../src/schedule/wakeups.ts";
-import { Store } from "../src/store/store.ts";
+import { MISSED_GRACE, Store } from "../src/store/store.ts";
 import { type Backend, backends, database } from "./support/fakeD1.ts";
 import { MemorySink } from "./support/memorySink.ts";
 
@@ -264,8 +264,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       running: false,
       lastStatus: null,
       lastAnswer: null,
+      lastRun: null,
+      nextRun: NOW - 1,
     });
-    expect((await store.job(id))?.nextRun).toBeLessThanOrEqual(NOW);
     expect(await db.query("SELECT * FROM delegations")).toEqual([]);
     expect(prompts).toEqual([]);
     expect(sink.texts()).toEqual([]);
@@ -277,6 +278,77 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(await db.query("SELECT bot,task,status,answer FROM delegations")).toEqual([
       { bot: writer.id, task: "check the build", status: "completed", answer: "drafted" },
     ]);
+  });
+
+  it("a busy job handed back keeps its original due time", async () => {
+    const { db, store, chief, addJob, once, clock, prompts } = await setup(["done late"]);
+    const id = await addJob({ first: NOW - 100 });
+    const elsewhere = new Lease(db, `bot-${chief.id}`, { clock: () => clock.get() * 1000 });
+    expect(await elsewhere.acquire()).toBe(true);
+    await once();
+    const waiting = { running: false, lastRun: null, lastStatus: null, nextRun: NOW - 100 };
+    expect(await store.job(id)).toMatchObject(waiting);
+    clock.set(NOW + 50);
+    await once();
+    expect(await store.job(id)).toMatchObject(waiting);
+    expect(prompts).toEqual([]);
+
+    await elsewhere.release();
+    await once();
+    expect(await store.job(id)).toMatchObject({
+      lastStatus: "completed",
+      lastRun: NOW + 50,
+      nextRun: NOW + 50 + HOUR,
+    });
+  });
+
+  it("a skip job busy past the grace is recorded as missed", async () => {
+    const { db, store, sink, chief, addJob, once, clock, prompts } = await setup([]);
+    const id = await addJob({ missed: "skip" });
+    const elsewhere = new Lease(db, `bot-${chief.id}`, {
+      ttlSeconds: 3 * HOUR,
+      clock: () => clock.get() * 1000,
+    });
+    expect(await elsewhere.acquire()).toBe(true);
+    await once();
+    expect(await store.job(id)).toMatchObject({
+      running: false,
+      lastStatus: null,
+      nextRun: NOW - 1,
+    });
+    clock.set(NOW + MISSED_GRACE + 10);
+    await once();
+    expect(await store.job(id)).toMatchObject({
+      status: "active",
+      running: false,
+      lastStatus: "missed",
+      lastRun: null,
+      nextRun: NOW + MISSED_GRACE + 10 + HOUR,
+    });
+    expect(prompts).toEqual([]);
+    expect(sink.texts()).toEqual([]);
+  });
+
+  it("a busy event job keeps its wake-up queued, and a cancelled one ends it", async () => {
+    const { db, store, chief, addJob, once } = await setup([]);
+    const id = await addJob({ spec: "event:deploy", first: null });
+    const elsewhere = new Lease(db, `bot-${chief.id}`, { clock: () => NOW * 1000 });
+    expect(await elsewhere.acquire()).toBe(true);
+    expect(await receiveWakeup(db, "main", 1, "deploy", "d-1", NOW)).toBe("queued");
+    await once();
+    expect(await store.job(id)).toMatchObject({ running: false, lastRun: null, nextRun: null });
+    expect((await wakeupHistory(db, "main", id))[0]).toMatchObject({
+      status: "queued",
+      claimed: null,
+    });
+    // Cancelled between the claim and the hand-back.
+    await store.holdScheduler("runner-x", 60);
+    const [job] = await store.claimDue(NOW, { owner: "runner-x", next: () => null });
+    expect(job?.id).toBe(id);
+    await store.cancelJob(id);
+    expect(await store.releaseJob(job as NonNullable<typeof job>)).toBe(true);
+    expect(await store.job(id)).toMatchObject({ status: "cancelled", running: false });
+    expect((await wakeupHistory(db, "main", id))[0]).toMatchObject({ status: "cancelled" });
   });
 
   it("cancelling a running job stops its run", async () => {

@@ -47,6 +47,11 @@ export interface JobChanges {
   missed?: "run" | "skip";
 }
 
+/** A job `claimDue` marked running, with the run times it had before the claim. */
+export interface ClaimedJob extends Job {
+  before: { nextRun: number | null; lastRun: number | null };
+}
+
 /** Gives a job's next run after a time, or null when it does not repeat. */
 export type NextRun = (spec: string, after: number) => number | null;
 
@@ -169,7 +174,7 @@ export async function claimDue(
   ctx: StoreContext,
   now: number,
   opts: { owner: string; next: NextRun; chat?: number; busyBots?: string[] },
-): Promise<Job[]> {
+): Promise<ClaimedJob[]> {
   if (!(await automationOn(ctx))) return [];
   const { db, instance } = ctx;
   const params: Param[] = [instance];
@@ -190,9 +195,10 @@ export async function claimDue(
   const guard =
     "WHERE instance=? AND id=? AND version=? AND running=0 AND status='active' AND EXISTS " +
     "(SELECT 1 FROM scheduler_leases WHERE instance=? AND owner=? AND expires>?)";
-  const claimed: Job[] = [];
+  const claimed: ClaimedJob[] = [];
   for (const row of rows) {
     const found = toJob(row);
+    const before = { nextRun: found.nextRun, lastRun: found.lastRun };
     if (busy.has(found.bot)) continue;
     const key: Param[] = [instance, found.id, Number(row.version), instance, opts.owner, now];
     if (found.spec.startsWith(EVENT_PREFIX)) {
@@ -206,7 +212,7 @@ export async function claimDue(
           "WHERE instance=? AND job=? AND status='queued' ORDER BY id LIMIT 1)",
         [now, instance, found.id],
       );
-      claimed.push({ ...found, running: true, lastRun: now });
+      claimed.push({ ...found, running: true, lastRun: now, before });
       busy.add(found.bot);
       continue;
     }
@@ -226,7 +232,7 @@ export async function claimDue(
       [upcoming, status, now, ...key],
     );
     if (taken === 0) continue;
-    claimed.push({ ...found, nextRun: upcoming, status, running: true, lastRun: now });
+    claimed.push({ ...found, nextRun: upcoming, status, running: true, lastRun: now, before });
     busy.add(found.bot);
   }
   return claimed;
@@ -270,28 +276,33 @@ export async function finishJob(
 }
 
 /**
- * Hands back a claim whose run never started, so the job waits for a later claim and records no
- * run. Only the claim made at `claimedAt` is handed back. The job is due again at `due`, a one-off
- * the claim ended is live again, and an event job's wake-up goes back in the queue. A job
- * cancelled meanwhile stays cancelled.
+ * Hands back a claim whose run never started, as if it had not been made: the job gets back the
+ * next and last run times it had before, a one-off the claim ended is live again, and an event
+ * job's wake-up goes back in the queue. Only a job still under this claim (running, claimed at
+ * `job.lastRun`) is handed back. A job cancelled meanwhile stays cancelled, and its wake-up ends
+ * cancelled instead of waiting again.
  */
-export async function releaseJob(
-  ctx: StoreContext,
-  id: number,
-  claimedAt: number,
-  due: number | null,
-): Promise<boolean> {
+export async function releaseJob(ctx: StoreContext, job: ClaimedJob): Promise<boolean> {
+  const claimedAt = job.lastRun;
+  if (claimedAt === null) return false;
   const changed = await ctx.db.run(
     "UPDATE jobs SET running=0,next_run=CASE WHEN status='cancelled' THEN next_run ELSE ? END," +
-      "status=CASE WHEN status='done' THEN 'active' ELSE status END,version=version+1 " +
-      "WHERE instance=? AND id=? AND running=1 AND last_run=?",
-    [due, ctx.instance, id, claimedAt],
+      "last_run=?,status=CASE WHEN status='done' THEN 'active' ELSE status END," +
+      "version=version+1 WHERE instance=? AND id=? AND running=1 AND last_run=?",
+    [job.before.nextRun, job.before.lastRun, ctx.instance, job.id, claimedAt],
   );
   if (changed === 0) return false;
+  const current = await ctx.db.query("SELECT status FROM jobs WHERE instance=? AND id=?", [
+    ctx.instance,
+    job.id,
+  ]);
+  const cancelled = current[0]?.status === "cancelled";
+  const [sets, values]: [string, Param[]] = cancelled
+    ? ["status='cancelled',finished=?", [ctx.clock()]]
+    : ["status='queued',claimed=NULL", []];
   await ctx.db.run(
-    "UPDATE job_wakeups SET status='queued',claimed=NULL WHERE instance=? AND job=? " +
-      "AND claimed=? AND status='running'",
-    [ctx.instance, id, claimedAt],
+    `UPDATE job_wakeups SET ${sets} WHERE instance=? AND job=? AND claimed=? AND status='running'`,
+    [...values, ctx.instance, job.id, claimedAt],
   );
   return true;
 }
