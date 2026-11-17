@@ -10,7 +10,7 @@ import { FakeD1 } from "../support/fakeD1.ts";
 import { allRows, SHARED_FIXTURE, stepBack } from "./olderFile.ts";
 
 /** The versions a file can be found at and still be brought to 21 here. */
-const OLDER = [18, 19, 20];
+const OLDER = [17, 18, 19, 20];
 
 type Row = Record<string, unknown>;
 
@@ -149,6 +149,22 @@ describe("upgrading a SQLite file from an older schema", () => {
       expect(copy.pragma("user_version", { simple: true })).toBe(version);
     } finally {
       copy.close();
+    }
+  });
+
+  it("adds write counters only where a file at 17 lacks them", async () => {
+    const path = olderFile(17);
+    const db = new BetterSqlite3(path);
+    db.exec("ALTER TABLE inbox ADD COLUMN version INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE inbox SET version = 4");
+    db.close();
+    await open(path);
+    const after = new BetterSqlite3(path, { readonly: true });
+    try {
+      expect(after.prepare("SELECT DISTINCT version FROM inbox").all()).toEqual([{ version: 4 }]);
+      expect(after.prepare("SELECT DISTINCT version FROM jobs").all()).toEqual([{ version: 0 }]);
+    } finally {
+      after.close();
     }
   });
 

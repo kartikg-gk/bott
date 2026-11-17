@@ -15,6 +15,23 @@ export interface Upgrade {
   statements(file: FileFacts): string[] | Promise<string[]>;
 }
 
+/** Tables whose rows count their writes, so an update only lands on the version it read. */
+const COUNTED = ["jobs", "web_runs", "approvals", "inbox", "delegations", "scheduler_leases"];
+
+/** A write counter on each shared row. A table that already has one is left as it is. */
+const writeCounters: Upgrade = {
+  reaches: 18,
+  async statements(file) {
+    const missing: string[] = [];
+    for (const table of COUNTED) {
+      if (!(await file.columns(table)).has("version")) missing.push(table);
+    }
+    return missing.map(
+      (table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 0`,
+    );
+  },
+};
+
 /** Notes and skill files for hosted bots, whose folders do not outlast a request. */
 const hostedFiles: Upgrade = {
   reaches: 19,
@@ -47,7 +64,7 @@ const runContext: Upgrade = {
 };
 
 /** Every step, oldest first. The last one reaches the schema this build writes. */
-export const UPGRADES: readonly Upgrade[] = [hostedFiles, leases, runContext];
+export const UPGRADES: readonly Upgrade[] = [writeCounters, hostedFiles, leases, runContext];
 
 /** The oldest schema version a file can be at and still be brought up to date here. */
 export function oldestUpgradable(): number {
