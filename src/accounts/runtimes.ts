@@ -1,5 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { ModelProvider } from "../agent/providers/types.ts";
+import type { Database } from "../db/database.ts";
+import { type LimitsConfig, ModelLimits } from "../limits/limits.ts";
 import type { ProviderFactory } from "../runtime/sessions.ts";
 import { type AccountProviderOptions, accountProvider } from "./models.ts";
 import type { Account, AccountStore } from "./store.ts";
@@ -14,8 +17,10 @@ export interface AccountRuntime {
   /** Where session files go; null when hosted, where transcripts stay in the database. */
   sessionsDir: string | null;
   databasePath: string;
-  /** Builds each bot's provider from the account's saved model and key. */
+  /** Builds each bot's provider from the account's saved model and key, metered. */
   providers: ProviderFactory;
+  /** The account's request and spend limits; each run goes inside `limits.operation`. */
+  limits: ModelLimits;
 }
 
 export interface AccountRuntimesOptions<T> {
@@ -28,6 +33,8 @@ export interface AccountRuntimesOptions<T> {
   /** One factory for every account instead of each account's own model, as in tests. */
   fixed?: ProviderFactory;
   providerOptions?: AccountProviderOptions;
+  /** Where daily counts are kept (the gateway database) and the limits every account gets. */
+  limits: { db: Database; config: Partial<LimitsConfig> };
   /** Builds the account's store, sessions and whatever else serves it. */
   create: (runtime: AccountRuntime) => T | Promise<T>;
 }
@@ -55,6 +62,15 @@ export class AccountRuntimes<T> {
     const projectDir = join(stateDir, "workspace");
     mkdirSync(projectDir, { recursive: true });
     const { store, fixed, providerOptions } = this.opts;
+    // Each account's daily counts are its own, kept under its instance in the shared tables.
+    const limits = new ModelLimits(this.opts.limits.db, instance, this.opts.limits.config);
+    const wrap = (provider: ModelProvider, name: string) => limits.meter(provider, name);
+    const providers: ProviderFactory = fixed
+      ? (bot, profile) => {
+          const provider = fixed(bot, profile);
+          return wrap(provider, provider.id);
+        }
+      : () => accountProvider(store, instance, { ...providerOptions, wrap });
     return {
       account,
       instance,
@@ -62,7 +78,8 @@ export class AccountRuntimes<T> {
       projectDir,
       sessionsDir: this.opts.hosted ? null : join(stateDir, "sessions"),
       databasePath: join(stateDir, "gateway.sqlite3"),
-      providers: fixed ?? (() => accountProvider(store, instance, providerOptions)),
+      providers,
+      limits,
     };
   }
 

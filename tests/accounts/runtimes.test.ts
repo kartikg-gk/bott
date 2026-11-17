@@ -8,6 +8,7 @@ import type { ModelProvider } from "../../src/agent/providers/types.ts";
 import type { Bot } from "../../src/bots/bots.ts";
 import type { Profile } from "../../src/bots/profiles.ts";
 import type { Database } from "../../src/db/database.ts";
+import { ensureSchema } from "../../src/db/schema.ts";
 import { KEY } from "../support/accounts.ts";
 import { type Backend, backends, database } from "../support/fakeD1.ts";
 
@@ -37,6 +38,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   async function fresh(opts: { hosted?: boolean; allowed?: string[] } = {}) {
     const { db } = database(kind);
     open.push(db);
+    await ensureSchema(db);
     const stateDir = mkdtempSync(join(tmpdir(), "accounts-"));
     dirs.push(stateDir);
     const store = await AccountStore.open(db, "realm-1", KEY);
@@ -55,6 +57,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       store,
       login: { permitted: (email) => allowed.has(email) },
       providerOptions: { fetch, retry: false },
+      limits: { db, config: {} },
       create: async (runtime) => {
         created.push(runtime);
         return { runtime };
@@ -64,7 +67,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       (await store.session(await store.signIn(subject, `${subject}@x.test`, null))) as NonNullable<
         Awaited<ReturnType<AccountStore["session"]>>
       >;
-    return { store, runtimes, stateDir, sent, created, account };
+    return { db, store, runtimes, stateDir, sent, created, account };
   }
 
   it("gives each account its own instance, folders and saved model", async () => {
@@ -113,6 +116,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       store: made.store,
       login: { permitted: () => true },
       fixed,
+      limits: { db: made.db, config: {} },
       create: (runtime) => runtime,
     });
     const runtime = await runtimes.get(await made.account("alice"));
@@ -131,5 +135,85 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const { runtimes, account } = await fresh();
     const alice = await account("alice");
     await expect(runtimes.get({ ...alice, id: "../escape" })).rejects.toThrow("Invalid account ID");
+  });
+});
+
+describe.each(backends)("%s backend, with limits", (kind: Backend) => {
+  const open: Database[] = [];
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(open.splice(0).map((db) => db.close()));
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("counts each account's requests under its own instance on the gateway database", async () => {
+    const { db } = database(kind);
+    open.push(db);
+    await ensureSchema(db);
+    const stateDir = mkdtempSync(join(tmpdir(), "accounts-"));
+    dirs.push(stateDir);
+    const store = await AccountStore.open(db, "realm-1", KEY);
+    const sent: unknown[] = [];
+    const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+      sent.push(((await new Request(input, init).json()) as { model?: unknown }).model);
+      return new Response("no", { status: 400 });
+    };
+    const runtimes = new AccountRuntimes({
+      stateDir,
+      hosted: true,
+      store,
+      login: { permitted: () => true },
+      providerOptions: { fetch, retry: false },
+      limits: { db, config: { requestsPerDay: 1 } },
+      create: (runtime) => runtime,
+    });
+    const signIn = async (subject: string) => {
+      const account = await store.session(await store.signIn(subject, `${subject}@x.test`, null));
+      if (!account) throw new Error("no account");
+      await store.setModel(account.id, "openai", `${subject}-model`, `${subject}-key`);
+      return runtimes.get(account);
+    };
+    const alice = await signIn("alice");
+    const bob = await signIn("bob");
+    await alice.limits.operation(() => firstRequest(alice.providers(bot, profile)));
+    await expect(
+      alice.limits.operation(() => firstRequest(alice.providers(bot, profile))),
+    ).rejects.toThrow("The daily request limit is used up");
+    await bob.limits.operation(() => firstRequest(bob.providers(bot, profile)));
+    expect(sent).toEqual(["alice-model", "bob-model"]);
+    const rows = await db.query("SELECT instance, count FROM model_requests ORDER BY instance");
+    expect(rows.map((row) => [row.instance, Number(row.count)]).sort()).toEqual(
+      [
+        [alice.instance, 1],
+        [bob.instance, 1],
+      ].sort(),
+    );
+  });
+
+  it("meters a fixed provider factory too", async () => {
+    const { db } = database(kind);
+    open.push(db);
+    await ensureSchema(db);
+    const stateDir = mkdtempSync(join(tmpdir(), "accounts-"));
+    dirs.push(stateDir);
+    const store = await AccountStore.open(db, "realm-1", KEY);
+    const fixed = (): ModelProvider => ({ id: "fixed", stream: async function* () {} });
+    const runtimes = new AccountRuntimes({
+      stateDir,
+      hosted: true,
+      store,
+      login: { permitted: () => true },
+      fixed,
+      limits: { db, config: { requestsPerRun: 1 } },
+      create: (runtime) => runtime,
+    });
+    const account = await store.session(await store.signIn("alice", "alice@x.test", null));
+    const runtime = await runtimes.get(account as NonNullable<typeof account>);
+    await expect(
+      runtime.limits.operation(async () => {
+        await firstRequest(runtime.providers(bot, profile));
+        await firstRequest(runtime.providers(bot, profile));
+      }),
+    ).rejects.toThrow("The request limit for this run is used up.");
   });
 });
