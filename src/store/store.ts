@@ -3,6 +3,7 @@ import type { Database } from "../db/database.js";
 import { ensureSchema } from "../db/schema.js";
 import type { StoreContext } from "./context.js";
 import * as inbox from "./inbox.js";
+import * as jobs from "./jobs.js";
 import { recoveryStatements } from "./recovery.js";
 import * as routes from "./routes.js";
 import * as work from "./work.js";
@@ -14,6 +15,8 @@ const DAY = 86400;
 
 export type { Approval, Decision, InboxItem, InboxStatus, TaskNotice } from "./inbox.js";
 export { REPORT_IDS, WEB_IDS } from "./inbox.js";
+export type { Job, JobChanges, NewJob, NextRun } from "./jobs.js";
+export { MAX_ACTIVE_JOBS, MISSED_GRACE } from "./jobs.js";
 export type { Route } from "./routes.js";
 export type { Task, WorkStatus } from "./work.js";
 
@@ -191,6 +194,52 @@ export class Store {
 
   finishDelegation(id: number, status: work.WorkStatus, answer: string | null) {
     return work.finishDelegation(this.ctx, id, status, answer);
+  }
+
+  addJob(j: jobs.NewJob) {
+    return jobs.addJob(this.ctx, j);
+  }
+
+  job(id: number) {
+    return jobs.job(this.ctx, id);
+  }
+
+  jobs(opts?: { actor?: number; bot?: string; history?: boolean }) {
+    return jobs.jobs(this.ctx, opts);
+  }
+
+  claimDue(now: number, opts?: { chat?: number; busyBots?: string[]; next?: jobs.NextRun }) {
+    return jobs.claimDue(this.ctx, now, opts);
+  }
+
+  finishJob(
+    id: number,
+    status: string,
+    answer?: string | null,
+    opts?: { claimedAt?: number; next?: number | null },
+  ) {
+    return jobs.finishJob(this.ctx, id, status, answer ?? null, opts);
+  }
+
+  setJobPaused(id: number, actor: number, paused: boolean) {
+    return jobs.setJobPaused(this.ctx, id, actor, paused);
+  }
+
+  editJob(id: number, actor: number, fields: jobs.JobChanges) {
+    return jobs.editJob(this.ctx, id, actor, fields);
+  }
+
+  cancelJob(id: number, actor?: number) {
+    return jobs.cancelJob(this.ctx, id, actor);
+  }
+
+  /** Mirrors the runner's lease into the scheduler row that recovery checks; call on renewal. */
+  holdScheduler(owner: string, ttlSeconds: number) {
+    return jobs.holdScheduler(this.ctx, owner, ttlSeconds);
+  }
+
+  releaseScheduler(owner: string) {
+    return jobs.releaseScheduler(this.ctx, owner);
   }
 
   async recover(): Promise<void> {
