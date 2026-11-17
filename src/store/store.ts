@@ -3,11 +3,14 @@ import type { Database } from "../db/database.js";
 import { ensureSchema } from "../db/schema.js";
 import type { StoreContext } from "./context.js";
 import { recoveryStatements } from "./recovery.js";
+import * as routes from "./routes.js";
 
 const CHIEF_NAME = "Chief of Staff";
 const CHIEF_ROLE = "The main bot for this person.";
 const APPROVAL_DAYS = 30;
 const DAY = 86400;
+
+export type { Route } from "./routes.js";
 
 export interface StoreOptions {
   retentionDays?: number;
@@ -54,6 +57,58 @@ export class Store {
     const row = rows[0];
     if (!row) throw new Error("The instance has no chief bot");
     return { id: String(row.id), name: String(row.name) };
+  }
+
+  conversation(chat: number, user: number, thread = 0) {
+    return routes.conversation(this.ctx, chat, user, thread);
+  }
+
+  getRoute(id: number) {
+    return routes.getRoute(this.ctx, id);
+  }
+
+  listRoutes(actor: number, opts?: { groups?: boolean }) {
+    return routes.listRoutes(this.ctx, actor, opts);
+  }
+
+  persistRoute(route: routes.Route, state: Partial<routes.Route>) {
+    return routes.persistRoute(this.ctx, route, state);
+  }
+
+  point(route: routes.Route, source: routes.Route) {
+    return routes.point(this.ctx, route, source);
+  }
+
+  switchBot(route: routes.Route, botId: string) {
+    return routes.switchBot(this.ctx, route, botId);
+  }
+
+  owns(chat: number, user: number, thread: number, session: string) {
+    return routes.owns(this.ctx, chat, user, thread, session);
+  }
+
+  remember(chat: number, user: number, thread: number, details: routes.SessionDetails) {
+    return routes.remember(this.ctx, chat, user, thread, details);
+  }
+
+  saved(session: string) {
+    return routes.saved(this.ctx, session);
+  }
+
+  sessions(chat: number, user: number, thread = 0, offset = 0) {
+    return routes.sessions(this.ctx, chat, user, thread, offset);
+  }
+
+  logMessage(route: routes.Route, body: string, direction: "in" | "out") {
+    return routes.logMessage(this.ctx, route, body, direction);
+  }
+
+  history(chat: number, user: number, limit = 100) {
+    return routes.history(this.ctx, chat, user, limit);
+  }
+
+  audit(event: string, chat: number, user: number, thread = 0) {
+    return routes.audit(this.ctx, event, chat, user, thread);
   }
 
   async recover(): Promise<void> {
