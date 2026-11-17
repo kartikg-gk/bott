@@ -1,5 +1,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { chmodSync } from "node:fs";
+import { join } from "node:path";
 import type { Database, Param, Row } from "../db/database.ts";
+import { SqliteDatabase } from "../db/sqlite.ts";
 import { associatedData, MASTER_KEY_VARIABLE, masterKey, Sealer } from "./sealing.ts";
 
 export const SESSION_SECONDS = 12 * 60 * 60;
@@ -273,5 +276,45 @@ export class AccountStore {
       [account, now, account, VALIDATION_LIMIT],
     );
     return added > 0;
+  }
+}
+
+/** The account file kept in the state folder when the gateway runs on this machine. */
+export const ACCOUNTS_FILE = "web-accounts.sqlite3";
+
+export interface OpenAccountsOptions extends AccountStoreOptions {
+  hosted: boolean;
+  /** The gateway's database; hosted accounts live in it. */
+  db?: Database;
+  stateDir: string;
+  realm: string;
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * Opens the account store where it belongs: hosted, on the gateway's database, so every
+ * process serving the deployment sees the same people; locally, in its own owner-only file in
+ * the state folder. `close` closes only a file this call opened.
+ */
+export async function openAccountStore(
+  opts: OpenAccountsOptions,
+): Promise<{ store: AccountStore; close: () => Promise<void> }> {
+  const key = (opts.env ?? process.env)[MASTER_KEY_VARIABLE] ?? "";
+  masterKey({ [MASTER_KEY_VARIABLE]: key });
+  if (opts.hosted) {
+    if (!opts.db) throw new Error("Hosted accounts need the gateway database");
+    const store = await AccountStore.open(opts.db, opts.realm, key, opts);
+    return { store, close: async () => {} };
+  }
+  const path = join(opts.stateDir, ACCOUNTS_FILE);
+  const db = new SqliteDatabase(path);
+  try {
+    chmodSync(path, 0o600);
+    await db.run("PRAGMA foreign_keys=ON");
+    const store = await AccountStore.open(db, opts.realm, key, opts);
+    return { store, close: () => db.close() };
+  } catch (error) {
+    await db.close();
+    throw error;
   }
 }
