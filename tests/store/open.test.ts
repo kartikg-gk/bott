@@ -93,7 +93,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     await Store.open(db, "main", { clock, recover: false });
     expect(await state(db)).toEqual(before);
 
-    await Store.open(db, "main", { clock });
+    await Store.open(db, "main", { clock, recover: true });
     expect(await state(db)).toEqual({
       inbox: ["pending", "uncertain", "uncertain", "uncertain", "uncertain", "completed"],
       task: { status: "interrupted", finished: NOW },
@@ -107,6 +107,19 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     });
   });
 
+  it("opening with defaults leaves running work alone", async () => {
+    const db = fresh();
+    await Store.open(db, "main", { clock });
+    await unfinished(db);
+    const before = await state(db);
+    const store = await Store.open(db, "main", { clock });
+    expect(await state(db)).toEqual(before);
+    expect(before.task).toEqual({ status: "running", finished: null });
+
+    await store.recover();
+    expect((await state(db)).task).toEqual({ status: "interrupted", finished: NOW });
+  });
+
   it("recovery leaves jobs alone while a scheduler lease is live", async () => {
     const db = fresh();
     await Store.open(db, "main", { clock });
@@ -115,7 +128,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       "INSERT INTO scheduler_leases(instance,owner,heartbeat,expires) VALUES ('main','o',?,?)",
       [NOW, NOW + 60],
     );
-    await Store.open(db, "main", { clock });
+    await Store.open(db, "main", { clock, recover: true });
     const after = await state(db);
     expect(after.job).toEqual({ running: 1, last_status: null });
     expect(after.wakeup).toEqual({ status: "running" });

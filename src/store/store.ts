@@ -22,7 +22,11 @@ export type { DelegationStatus, Task, WorkStatus } from "./work.js";
 
 export interface StoreOptions {
   retentionDays?: number;
-  /** Settle work a stopped process left. Only the process that owns scheduled work should. */
+  /**
+   * Settle work a stopped process left while opening. Off unless asked: only the process that
+   * holds the runner lease and the scheduler row should recover, and it can instead call
+   * `recover()` once it holds both. Any other opener would interrupt live work.
+   */
   recover?: boolean;
   /** Seconds since the epoch, as a float. */
   clock?: () => number;
@@ -34,13 +38,16 @@ export class Store {
     private readonly retentionDays: number | undefined,
   ) {}
 
-  /** Opens the store on any database, makes sure the instance has one chief, and may recover. */
+  /**
+   * Opens the store on any database and makes sure the instance has one chief. Unfinished work is
+   * left alone unless `recover: true` is passed.
+   */
   static async open(db: Database, instance: string, opts: StoreOptions = {}): Promise<Store> {
     const clock = opts.clock ?? (() => Date.now() / 1000);
     const store = new Store({ db, instance, clock }, opts.retentionDays);
     await ensureSchema(db);
     await db.run("INSERT OR IGNORE INTO instances(id) VALUES (?)", [instance]);
-    if (opts.recover ?? true) await store.recover();
+    if (opts.recover === true) await store.recover();
     await db.run(
       "INSERT INTO bots(id,instance,name,name_key,role,chief,created) " +
         "SELECT ?,?,?,?,?,1,? WHERE NOT EXISTS (SELECT 1 FROM bots WHERE instance=? AND chief=1)",
@@ -245,6 +252,10 @@ export class Store {
     return jobs.releaseScheduler(this.ctx, owner);
   }
 
+  /**
+   * Settles inbox items, tasks, delegations, approvals and (when no scheduler lease is live) jobs
+   * that a stopped process left unfinished. Call only while holding the runner lease.
+   */
   async recover(): Promise<void> {
     const { db, instance, clock } = this.ctx;
     for (const [sql, params] of recoveryStatements(instance, clock())) await db.run(sql, params);

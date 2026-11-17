@@ -75,7 +75,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
 
   it("two stores racing to begin give one winner", async () => {
     const { store, db } = await fresh();
-    const other = await Store.open(db, "main", { clock, recover: false });
+    const other = await Store.open(db, "main", { clock });
     const route = await store.conversation(1, 2);
     const results = await Promise.all([
       store.beginDelegation(route, "bot-a", "one"),
