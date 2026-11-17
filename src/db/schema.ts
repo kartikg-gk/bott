@@ -54,7 +54,8 @@ async function keepCopy(file: SqliteDatabase): Promise<void> {
  */
 async function ensureFile(file: SqliteDatabase): Promise<void> {
   const version = Number((await file.query("PRAGMA user_version"))[0]?.user_version ?? 0);
-  if (version > SCHEMA_VERSION) throw new Error("This database was written by a later version of bott; update bott to open it");
+  if (version > SCHEMA_VERSION)
+    throw new Error("This database was written by a later version of bott; update bott to open it");
   if (version === 0) {
     const existing = await file.query(
       "SELECT count(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",

@@ -103,6 +103,8 @@ describe("sqlite file", () => {
     const newer = new SqliteDatabase(":memory:");
     dbs.push(newer);
     await newer.run("PRAGMA user_version = 22");
-    await expect(ensureSchema(newer)).rejects.toThrow("This database was written by a later version of bott; update bott to open it");
+    await expect(ensureSchema(newer)).rejects.toThrow(
+      "This database was written by a later version of bott; update bott to open it",
+    );
   });
 });

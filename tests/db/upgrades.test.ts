@@ -272,7 +272,9 @@ describe("upgrading a SQLite file from an older schema", () => {
   it("refuses a file newer than this build, and one with tables but no version", async () => {
     const newer = new SqliteDatabase(":memory:");
     await newer.run("PRAGMA user_version = 22");
-    await expect(ensureSchema(newer)).rejects.toThrow("This database was written by a later version of bott; update bott to open it");
+    await expect(ensureSchema(newer)).rejects.toThrow(
+      "This database was written by a later version of bott; update bott to open it",
+    );
     await newer.close();
     const unnumbered = new SqliteDatabase(":memory:");
     await unnumbered.run("CREATE TABLE notes(id INTEGER)");
