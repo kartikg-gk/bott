@@ -7,17 +7,28 @@ export const WEB_IDS = 2n ** 59n;
 /** Agent reports take IDs above this, above every web message. */
 export const REPORT_IDS = 2n ** 60n;
 
+/**
+ * Where an inbox item stands. These strings are what existing databases hold, so they stay.
+ * Waiting: `pending` (a message, which may be a command), `prompt` (text that is always a
+ * prompt, never a command) and `rejected` (a message to answer with a refusal).
+ */
 export type InboxStatus =
   | "pending"
+  | "prompt"
+  | "rejected"
   | "scheduled"
   | "dispatching"
   | "running"
   | "delivering"
   | "cancelling"
-  | "done"
+  | "completed"
+  | "stopped"
   | "failed"
+  | "delivery_failed"
+  | "uncertain"
   | "cancelled"
-  | "uncertain";
+  | "dismissed"
+  | "rejected_done";
 
 export interface InboxItem {
   id: bigint;
@@ -46,11 +57,26 @@ export interface Approval {
 
 export type Decision = "decided" | "expired" | "already" | "missing";
 
-/** Statuses of items that are still waiting or in flight. */
-const LIVE =
-  "('pending','scheduled','dispatching','running','delivering','cancelling','uncertain')";
+/** A notice owed to a conversation whose task was interrupted. */
+export interface TaskNotice {
+  task: number;
+  chat: number;
+  user: number;
+  actor: number;
+  thread: number;
+  text: string;
+}
 
-/** IDs are read as text, because D1 returns numbers as JSON and loses digits above 2^53. */
+/** Statuses of items waiting to be dispatched. */
+const WAITING = "('pending','prompt','rejected')";
+
+/** Commands whose argument is a prompt, so clearing a queue cancels them like prompts. */
+const PROMPT_COMMANDS = ["/queue ", "/steer "];
+
+/**
+ * IDs are read as text, because D1 returns numbers as JSON and loses digits above 2^53. Sort
+ * by `inbox.id`, since a bare `id` would sort the text alias.
+ */
 const ITEM =
   "CAST(id AS TEXT) AS id,chat,coalesce(route_user,user) AS route_user,user AS actor,thread," +
   "text,status,run";
@@ -71,8 +97,6 @@ function toItem(row: Row): InboxItem {
   };
 }
 
-const byId = (a: InboxItem, b: InboxItem) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-
 /**
  * Queues a message from the web page on the sender's route. The next ID is taken in the
  * statement that inserts it, so two writers cannot pick the same one.
@@ -91,7 +115,7 @@ export async function admitWeb(
   const rows = await db.query(
     `${INSERT}SELECT ?,max(coalesce((SELECT max(id) FROM inbox WHERE instance=? ` +
       "AND id>CAST(? AS INTEGER) AND id<=CAST(? AS INTEGER)),0)+1,CAST(? AS INTEGER)+1)," +
-      `?,?,?,'pending',?,?,?,? RETURNING ${ITEM}`,
+      `?,?,?,?,?,?,?,? RETURNING ${ITEM}`,
     [
       instance,
       instance,
@@ -101,6 +125,7 @@ export async function admitWeb(
       chat,
       user,
       text,
+      run ? "prompt" : "pending",
       run,
       now,
       route.thread,
@@ -129,22 +154,18 @@ export async function admitWeb(
   return item;
 }
 
-/** Items waiting to be dispatched, oldest first. */
-export async function pending(ctx: StoreContext): Promise<InboxItem[]> {
+/** Items waiting to be dispatched, oldest first. Nothing already dispatched is listed. */
+export async function items(ctx: StoreContext): Promise<InboxItem[]> {
   const rows = await ctx.db.query(
-    `SELECT ${ITEM} FROM inbox WHERE instance=? AND status='pending' ORDER BY id`,
+    `SELECT ${ITEM} FROM inbox WHERE instance=? AND status IN ${WAITING} ORDER BY inbox.id`,
     [ctx.instance],
   );
   return rows.map(toItem);
 }
 
-/** Items still waiting or in flight, oldest first. */
-export async function items(ctx: StoreContext): Promise<InboxItem[]> {
-  const rows = await ctx.db.query(
-    `SELECT ${ITEM} FROM inbox WHERE instance=? AND status IN ${LIVE} ORDER BY id`,
-    [ctx.instance],
-  );
-  return rows.map(toItem);
+/** The same items as `items`. */
+export function pending(ctx: StoreContext): Promise<InboxItem[]> {
+  return items(ctx);
 }
 
 /**
@@ -170,29 +191,41 @@ export async function mark(
 
 export async function isPending(ctx: StoreContext, item: InboxItem): Promise<boolean> {
   const rows = await ctx.db.query(
-    "SELECT 1 FROM inbox WHERE instance=? AND id=? AND status='pending'",
+    `SELECT 1 FROM inbox WHERE instance=? AND id=? AND status IN ${WAITING}`,
     [ctx.instance, item.id],
   );
   return rows.length > 0;
 }
 
-/** Cancels the route's items that have not started; returns how many. */
+/**
+ * Cancels the route's queued prompts that have not started; returns how many. Queued commands
+ * stay, except those that carry a prompt.
+ */
 export async function clearRouteQueue(ctx: StoreContext, route: Route): Promise<number> {
+  const carried = PROMPT_COMMANDS.map(() => " OR text LIKE ?").join("");
   return ctx.db.run(
     "UPDATE inbox SET status='cancelled',version=version+1 WHERE instance=? AND chat=? " +
-      "AND coalesce(route_user,user)=CAST(? AS INTEGER) AND thread=? AND status IN ('pending','scheduled')",
-    [ctx.instance, route.chat, route.user, route.thread],
+      "AND coalesce(route_user,user)=CAST(? AS INTEGER) AND thread=? " +
+      "AND status IN ('pending','prompt','scheduled') " +
+      `AND (status IN ('prompt','scheduled') OR text NOT LIKE '/%'${carried})`,
+    [
+      ctx.instance,
+      route.chat,
+      route.user,
+      route.thread,
+      ...PROMPT_COMMANDS.map((command) => `${command}%`),
+    ],
   );
 }
 
-/** Puts new text on an item and queues it again as an ordinary prompt. */
+/** Puts new text on an item and queues it again as a prompt, never read as a command. */
 export async function replacePrompt(
   ctx: StoreContext,
   item: InboxItem,
   text: string,
 ): Promise<void> {
   await ctx.db.run(
-    "UPDATE inbox SET text=?,status='pending',version=version+1 WHERE instance=? AND id=?",
+    "UPDATE inbox SET text=?,status='prompt',version=version+1 WHERE instance=? AND id=?",
     [text, ctx.instance, item.id],
   );
 }
@@ -247,7 +280,10 @@ export async function decide(
   return row.decision === null || row.decision === undefined ? "expired" : "already";
 }
 
-/** Queues a task's report for its conversation; returns the report's inbox ID. */
+/**
+ * Queues a task's report as a prompt for its conversation, and marks the task reported so it
+ * is not also announced as interrupted. Returns the report's inbox ID.
+ */
 export async function addReport(ctx: StoreContext, taskId: number, text: string): Promise<bigint> {
   const { db, instance, clock } = ctx;
   const task = (
@@ -259,7 +295,7 @@ export async function addReport(ctx: StoreContext, taskId: number, text: string)
   if (!task) throw new Error(`No task ${taskId}`);
   const rows = await db.query(
     `${INSERT}SELECT ?,max(coalesce((SELECT max(id) FROM inbox WHERE instance=?),0)+1,` +
-      "CAST(? AS INTEGER)+1),?,?,?,'pending',NULL,?,?,? RETURNING CAST(id AS TEXT) AS id",
+      "CAST(? AS INTEGER)+1),?,?,?,'prompt',NULL,?,?,? RETURNING CAST(id AS TEXT) AS id",
     [
       instance,
       instance,
@@ -272,23 +308,32 @@ export async function addReport(ctx: StoreContext, taskId: number, text: string)
       Number(task.user),
     ],
   );
+  await db.run("UPDATE tasks SET reported=1 WHERE instance=? AND id=?", [instance, taskId]);
   return BigInt(String(rows[0]?.id));
 }
 
 /**
- * Claims the reports nobody has taken yet, optionally for one chat. One statement claims them,
- * so two callers never take the same report.
+ * Claims the interrupted tasks nobody has been told about, optionally for one chat, and
+ * returns a notice for each. One statement claims them, so each is announced once.
  */
 export async function takeUnreported(
   ctx: StoreContext,
   opts: { chat?: number } = {},
-): Promise<InboxItem[]> {
+): Promise<TaskNotice[]> {
   const chat = opts.chat ?? null;
   const rows = await ctx.db.query(
-    "UPDATE inbox SET status='scheduled',version=version+1 WHERE instance=? " +
-      "AND id>CAST(? AS INTEGER) AND status='pending' AND (? IS NULL OR chat=?) " +
-      `RETURNING ${ITEM}`,
-    [ctx.instance, REPORT_IDS, chat, chat],
+    "UPDATE tasks SET reported=1 WHERE instance=? AND status='interrupted' AND reported=0 " +
+      "AND (? IS NULL OR chat=?) RETURNING id,chat,user,actor,thread",
+    [ctx.instance, chat, chat],
   );
-  return rows.map(toItem).sort(byId);
+  return rows
+    .map((row) => ({
+      task: Number(row.id),
+      chat: Number(row.chat),
+      user: Number(row.user),
+      actor: Number(row.actor),
+      thread: Number(row.thread),
+      text: `Task #${row.id} was interrupted and not replayed.`,
+    }))
+    .sort((a, b) => a.task - b.task);
 }

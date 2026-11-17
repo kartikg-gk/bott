@@ -11,7 +11,7 @@ const CHIEF_ROLE = "The main bot for this person.";
 const APPROVAL_DAYS = 30;
 const DAY = 86400;
 
-export type { Approval, Decision, InboxItem, InboxStatus } from "./inbox.js";
+export type { Approval, Decision, InboxItem, InboxStatus, TaskNotice } from "./inbox.js";
 export { REPORT_IDS, WEB_IDS } from "./inbox.js";
 export type { Route } from "./routes.js";
 
