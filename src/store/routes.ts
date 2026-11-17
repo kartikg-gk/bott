@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { Param, Row } from "../db/database.js";
 import type { StoreContext } from "./context.js";
 
@@ -278,29 +277,51 @@ export async function remember(
       thread,
     ],
   );
+  const previous = (
+    await db.query("SELECT data FROM session_status WHERE instance=? AND session=?", [
+      instance,
+      details.session,
+    ])
+  )[0];
+  const merged: Record<string, unknown> = { ...parseDetails(previous?.data) };
+  merged.session_id = details.session;
+  merged.title = details.title ?? null;
+  merged.provider = details.provider ?? null;
+  merged.model = details.model ?? null;
+  merged.thinking = details.thinking ?? null;
+  if (details.sessionFile) merged.sessionFile = details.sessionFile;
   await db.run(
     "INSERT INTO session_status(instance,session,data) VALUES(?,?,?) " +
       "ON CONFLICT(instance,session) DO UPDATE SET data=excluded.data",
-    [instance, details.session, JSON.stringify({ sessionFile: details.sessionFile })],
+    [instance, details.session, JSON.stringify(merged)],
   );
+}
+
+function parseDetails(raw: unknown): Record<string, unknown> {
+  try {
+    const data: unknown = JSON.parse(String(raw ?? "{}"));
+    return data && typeof data === "object" && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 const SAVED =
   "SELECT o.session,o.chat,o.user,o.thread,o.title,o.provider,o.model,o.thinking,o.created," +
-  "o.updated,r.id,r.bot,s.data FROM session_owners o " +
+  "o.updated,r.id,r.bot,s.data," +
+  "(SELECT x.session_file FROM routes x WHERE x.instance=o.instance AND x.session=o.session " +
+  "AND x.session_file IS NOT NULL ORDER BY x.updated DESC,x.id DESC LIMIT 1) AS route_file " +
+  "FROM session_owners o " +
   "LEFT JOIN routes r ON r.instance=o.instance AND r.chat=o.chat AND r.user=o.user " +
   "AND r.thread=o.thread " +
   "LEFT JOIN session_status s ON s.instance=o.instance AND s.session=o.session";
 
 function savedRoute(row: Row): Route {
-  let file: string | null = null;
-  try {
-    const data = JSON.parse(String(row.data ?? "{}")) as { sessionFile?: unknown };
-    file = typeof data.sessionFile === "string" ? data.sessionFile : null;
-  } catch {
-    file = null;
-  }
-  return toRoute({ ...row, id: row.id ?? 0, session_file: file });
+  const data = parseDetails(row.data);
+  const file = data.sessionFile ?? data.session_file ?? row.route_file;
+  return toRoute({ ...row, id: row.id ?? 0, session_file: typeof file === "string" ? file : null });
 }
 
 export async function saved(ctx: StoreContext, session: string): Promise<Route | null> {
@@ -356,20 +377,4 @@ export async function history(
     text: String(row.text),
     created: Number(row.created),
   }));
-}
-
-/** Notes that something happened for this person and thread, kept with the approvals. */
-export async function audit(
-  ctx: StoreContext,
-  event: string,
-  chat: number,
-  user: number,
-  thread = 0,
-): Promise<void> {
-  const now = ctx.clock();
-  await ctx.db.run(
-    "INSERT INTO approvals(instance,id,chat,user,run,tool,digest,created,expires,decision," +
-      "source,thread) VALUES(?,?,?,?,'',?,'',?,?,'recorded','audit',?)",
-    [ctx.instance, randomUUID().replaceAll("-", ""), chat, user, event, now, now, thread],
-  );
 }

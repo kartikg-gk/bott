@@ -129,10 +129,35 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     ]);
   });
 
-  it("audit records the event with the approvals", async () => {
+  it("remember keeps existing session details", async () => {
     const { store, db } = await fresh();
-    await store.audit("approved", 1, 2, 3);
-    const rows = await db.query("SELECT tool,chat,user,thread FROM approvals");
-    expect(rows).toEqual([{ tool: "approved", chat: 1, user: 2, thread: 3 }]);
+    await store.remember(1, 2, 0, { session: "s", sessionFile: null, title: "T" });
+    await db.run("UPDATE session_status SET data=? WHERE session='s'", [
+      JSON.stringify({ session_id: "s", extra: "kept", title: "old" }),
+    ]);
+    await store.remember(1, 2, 0, { session: "s", sessionFile: "f.jsonl", title: "New" });
+    const rows = await db.query("SELECT data FROM session_status WHERE session='s'");
+    expect(JSON.parse(String(rows[0]?.data))).toMatchObject({
+      extra: "kept",
+      title: "New",
+      sessionFile: "f.jsonl",
+    });
+  });
+
+  it("saved sessions written earlier show their session file", async () => {
+    const { store, db } = await fresh();
+    await db.run(
+      "INSERT INTO session_owners(instance,session,chat,user,thread,title,created,updated) " +
+        "VALUES('main','old',1,2,0,'Old',1,2)",
+    );
+    await db.run("INSERT INTO session_status(instance,session,data) VALUES('main','old',?)", [
+      JSON.stringify({ session_id: "old", title: "Old" }),
+    ]);
+    await store.persistRoute(await store.conversation(1, 2), {
+      session: "old",
+      sessionFile: "/data/old.jsonl",
+    });
+    expect((await store.saved("old"))?.sessionFile).toBe("/data/old.jsonl");
+    expect((await store.sessions(1, 2))[0]?.sessionFile).toBe("/data/old.jsonl");
   });
 });

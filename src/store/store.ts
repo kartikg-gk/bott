@@ -107,10 +107,6 @@ export class Store {
     return routes.history(this.ctx, chat, user, limit);
   }
 
-  audit(event: string, chat: number, user: number, thread = 0) {
-    return routes.audit(this.ctx, event, chat, user, thread);
-  }
-
   async recover(): Promise<void> {
     const { db, instance, clock } = this.ctx;
     for (const [sql, params] of recoveryStatements(instance, clock())) await db.run(sql, params);
