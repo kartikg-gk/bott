@@ -219,7 +219,13 @@ export async function claimDue(
       busy.add(found.bot);
       continue;
     }
-    const upcoming = opts.next(found.spec, now);
+    let upcoming: number | null;
+    try {
+      upcoming = opts.next(found.spec, now);
+    } catch {
+      // A schedule this code cannot read stays as it is; the jobs after it are still claimed.
+      continue;
+    }
     const status = upcoming === null ? "done" : "active";
     const late = found.nextRun !== null && now - found.nextRun > MISSED_GRACE;
     if (found.missed === "skip" && late) {
@@ -244,7 +250,8 @@ export async function claimDue(
 /**
  * Records how a run ended. With `claimedAt`, only the claim made at that time is finished, so a
  * late finish from an earlier claim changes nothing. A `next` time moves the job on; null ends a
- * job that does not repeat.
+ * job that does not repeat. `claimDue` has already moved a job it claimed, so `next` is only for
+ * runs started some other way; passing it after a claim would skip a run.
  */
 export async function finishJob(
   ctx: StoreContext,

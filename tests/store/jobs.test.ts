@@ -36,6 +36,19 @@ describe.each(backends)("%s backend", (kind: Backend) => {
   const claim = (store: Store, opts: Partial<Parameters<Store["claimDue"]>[1]> = {}) =>
     store.claimDue(now, { owner: OWNER, next: hourly, ...opts });
 
+  it("a job whose schedule cannot be read is passed over, not every job after it", async () => {
+    const { store } = await fresh();
+    const broken = await store.addJob(job({ spec: "every:bad", bot: "b1" }));
+    const fine = await store.addJob(job({ bot: "b2" }));
+    const strict = (spec: string, after: number) => {
+      if (spec === "every:bad") throw new Error(`Bad schedule: ${spec}`);
+      return after + 3600;
+    };
+    const claimed = await claim(store, { next: strict });
+    expect(claimed.map((j) => j.id)).toEqual([fine]);
+    expect(await store.job(broken)).toMatchObject({ running: false, status: "active" });
+  });
+
   it("due jobs are claimed and marked running", async () => {
     const { store } = await fresh();
     const due = await store.addJob(job());
