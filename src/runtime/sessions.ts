@@ -18,7 +18,7 @@ import { fileTools } from "../agent/tools/files.ts";
 import { shellTool } from "../agent/tools/shell.ts";
 import type { Workspace } from "../agent/tools/workspace.ts";
 import type { ToolSpec } from "../agent/tools.ts";
-import { textOf } from "../agent/transcript.ts";
+import { type TranscriptEntry, textOf } from "../agent/transcript.ts";
 import { type BotApps, LOAD_PLUGIN } from "../apps/access.ts";
 import { type Bot, botRoot, MEMORY_FILES, systemAddition, workspaceDir } from "../bots/bots.ts";
 import {
@@ -344,6 +344,21 @@ export class SessionManager {
     } finally {
       release();
     }
+  }
+
+  /**
+   * Starts the route on a new session that already holds `entries`. Only transcripts kept in
+   * memory (hosted) are seeded; with session files the route keeps its own session.
+   */
+  async seed(route: Route, entries: TranscriptEntry[]): Promise<Route> {
+    if (this.config.sessionsDir !== null) return route;
+    const earlier = (await this.current(route.id)).session;
+    const cleared = await this.fresh(route);
+    // The session this replaces is never resumed, so its transcript is let go.
+    if (earlier) this.memory.forget(earlier);
+    const id = randomUUID();
+    await this.memory.replace(id, entries);
+    return this.store.persistRoute(cleared, { session: id, sessionFile: null });
   }
 
   /** Points the route at another bot, resuming whatever that bot had on this route. */

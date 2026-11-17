@@ -15,6 +15,7 @@ import { type ProviderFactory, type RuntimeConfig, SessionManager } from "../run
 import type { Route } from "../store/routes.ts";
 import { Store } from "../store/store.ts";
 import { WebChannel } from "./channel.ts";
+import { parseEarlier, saveEarlier, takeEarlier, toEntries } from "./earlier.ts";
 import { RunJournal } from "./journal.ts";
 
 /** The person the web page acts for when nothing else says so. */
@@ -97,7 +98,18 @@ export class Gateway {
     }
     const dispatcher = new Dispatcher(store, sessions, channel, {
       workers: opts.workers,
-      exchange: learning,
+      exchange: opts.hosted
+        ? {
+            // Hosted runs keep no session between requests: each starts on a new one holding
+            // what the browser sent, before memory adds anything above the message.
+            before: async (route, item) => {
+              const earlier = toEntries(await takeEarlier(store, item.id));
+              await sessions.seed(route, earlier);
+              return (await learning?.before(route, item)) ?? "";
+            },
+            after: (route, item, answer) => learning?.after(route, item, answer),
+          }
+        : learning,
       wrap: limits ? (work) => limits.operation(() => work()) : undefined,
       observer: {
         started: (item, bot) => journal.emit(item.run as string, "run_started", { bot }),
@@ -156,9 +168,15 @@ export class Gateway {
   async queueRun(
     route: Route,
     text: string,
-    _earlier: unknown,
+    earlier: unknown,
   ): Promise<{ run: string; inbox: bigint }> {
-    return this.journal.queue(route, text);
+    const messages = parseEarlier(earlier);
+    const queued = await this.journal.queue(route, text);
+    // Only a hosted gateway needs them; on this machine the route keeps its own session.
+    if (this.hosted && messages.length > 0) {
+      await saveEarlier(this.store, queued.inbox, messages);
+    }
+    return queued;
   }
 
   /** Whether a run or a background agent is going. */
