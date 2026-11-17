@@ -175,7 +175,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const { db, store, once, loop } = await setup();
     const first = loop();
     await until(async () => (await db.query("SELECT 1 FROM scheduler_leases")).length > 0);
-    await expect(once()).rejects.toThrow("Another runner holds this instance; stop it or wait for its hold to run out");
+    await expect(once()).rejects.toThrow(
+      "Another runner holds this instance; stop it or wait for its hold to run out",
+    );
     first.stop.abort();
     await first.done;
     expect(await db.query("SELECT * FROM leases")).toEqual([]);
@@ -198,7 +200,9 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     const other = await side(db, () => later, []);
     const run = () =>
       runRunner({ ...other, instance: "main", once: true, poll: POLL, owner: "runner-b" });
-    await expect(run()).rejects.toThrow("Another runner holds this instance; stop it or wait for its hold to run out");
+    await expect(run()).rejects.toThrow(
+      "Another runner holds this instance; stop it or wait for its hold to run out",
+    );
     later = NOW + 61;
     await run();
     expect(await store.job(id)).toMatchObject({
@@ -602,7 +606,9 @@ describe("covering several instances", () => {
     }).acquire();
     await expect(
       runRunners({ targets: async () => [first, taken], poll: POLL, refresh: POLL }),
-    ).rejects.toThrow("Another runner holds this instance; stop it or wait for its hold to run out");
+    ).rejects.toThrow(
+      "Another runner holds this instance; stop it or wait for its hold to run out",
+    );
     expect(await first.db.query("SELECT * FROM leases")).toEqual([]);
   });
 });
