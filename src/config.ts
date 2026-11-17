@@ -56,6 +56,8 @@ export interface Config {
   retentionDays: number;
   /** How hard models think before answering when a conversation has not chosen. */
   thinking: string | undefined;
+  /** Seconds running work gets to end by itself when `run` or `runner` is told to stop. */
+  stopSeconds: number;
   computer: ComputerSettings;
   limits: LimitsConfig;
   memory: MemoryConfig;
@@ -132,6 +134,11 @@ export const SETTINGS: Setting[] = [
     name: "BOTT_RETENTION_DAYS",
     about: "Days kept of finished message text, chat history and run records",
     example: "7",
+  },
+  {
+    name: "BOTT_STOP_SECONDS",
+    about: "Seconds running work may take to end when the server stops",
+    example: "30",
   },
   { name: "BOTT_EXECUTOR", about: "local, docker or daytona: where bots run commands" },
   { name: "BOTT_DOCKER_IMAGE", about: "Image for bot containers" },
@@ -338,6 +345,7 @@ export function readConfig(env: Env = process.env, opts: ReadOptions = {}): Conf
     workers: whole(env, "BOTT_WORKERS", 1, 256),
     retentionDays: whole(env, "BOTT_RETENTION_DAYS", 1, 3650) ?? 7,
     thinking: choice(env, "BOTT_THINKING", THINKING_LEVELS),
+    stopSeconds: whole(env, "BOTT_STOP_SECONDS", 0, 3600) ?? 30,
     computer,
     limits,
     memory,

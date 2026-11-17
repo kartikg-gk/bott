@@ -49,7 +49,11 @@ export interface Server {
    * asking, so accounts made or removed since the last call are counted in or out.
    */
   gateways(): Promise<Gateway[]>;
-  close(): Promise<void>;
+  /**
+   * Starts no new run, gives the runs going up to `graceMs` to end, stops the rest, then closes
+   * the database.
+   */
+  close(graceMs?: number): Promise<void>;
 }
 
 /** A provider that only ever explains why no model can be called. */
@@ -129,8 +133,8 @@ async function tokenServer(config: Config, db: Database, opts: StartOptions): Pr
     handler,
     accounts: null,
     gateways: async () => [gateway],
-    close: async () => {
-      await gateway.close();
+    close: async (graceMs) => {
+      await gateway.close(graceMs);
       await db.close();
     },
   };
@@ -209,8 +213,8 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       handler,
       accounts: store,
       gateways: () => built.runtimes.current(),
-      close: async () => {
-        await built.close();
+      close: async (graceMs) => {
+        await built.close(graceMs);
         await opened.close();
         await db.close();
       },

@@ -18,7 +18,7 @@ import { type DoctorIo, doctor, type Probe } from "./doctor.ts";
 import type { ModelLimits } from "./limits/limits.ts";
 import { runRunners } from "./runner.ts";
 import type { ProviderFactory } from "./runtime/sessions.ts";
-import { serveNode } from "./server.ts";
+import { type Listening, serveNode } from "./server.ts";
 import { startServer } from "./startup.ts";
 import { Store } from "./store/store.ts";
 
@@ -27,7 +27,10 @@ export interface Io {
   /** Where `init` keeps the settings file. */
   cwd: string;
   out: (line: string) => void;
-  /** Stops `run` and `runner`; the process wires it to Ctrl+C. */
+  /**
+   * Stops `run` and `runner`: no new work starts, running work gets BOTT_STOP_SECONDS to end,
+   * and what is left is stopped. The process wires it to Ctrl+C and SIGTERM.
+   */
   signal?: AbortSignal;
   /** One provider for every bot, as in tests. */
   providers?: ProviderFactory;
@@ -111,14 +114,33 @@ async function init(io: Io, config: Config, args: string[]): Promise<number> {
   return 0;
 }
 
+/** Says that a stop has begun and how long running work has. */
+function stopping(io: Io, config: Config): void {
+  io.out(
+    `Stopping: no new work starts; running work has ${config.stopSeconds} s to finish ` +
+      "(press Ctrl+C again to quit at once)",
+  );
+}
+
+/** What a request that arrives while the server is stopping is told. */
+const STOPPING = () =>
+  Response.json(
+    { error: "The server is stopping" },
+    { status: 503, headers: { "Cache-Control": "no-store", Connection: "close" } },
+  );
+
 async function run(io: Io, config: Config, args: string[]): Promise<number> {
   parseArgs({ args, options: {} });
   const server = await startServer(config, {
     env: io.env,
     ...(io.providers ? { providers: io.providers } : {}),
   });
+  let listening: Listening | undefined;
+  let graceMs = 0;
+  let closing = false;
+  const handler = async (request: Request) => (closing ? STOPPING() : server.handler(request));
   try {
-    const listening = await serveNode(server.handler, { host: config.host, port: config.port });
+    listening = await serveNode(handler, { host: config.host, port: config.port });
     const shown = config.host.includes(":") ? `[${config.host}]` : config.host;
     io.out(`Serving on http://${shown}:${listening.port}`);
     io.out("Scheduled jobs run in a separate process: bott runner");
@@ -127,10 +149,16 @@ async function run(io: Io, config: Config, args: string[]): Promise<number> {
       for (const gateway of await server.gateways()) await gateway.dispatch();
     }
     await stopped(io.signal);
-    await listening.close();
+    stopping(io, config);
+    closing = true;
+    listening.stop();
+    graceMs = config.stopSeconds * 1000;
   } finally {
-    await server.close();
+    // Runs finish or end interrupted, and are written down, before the database closes.
+    await server.close(graceMs);
+    await listening?.close();
   }
+  io.out("Stopped");
   return 0;
 }
 
@@ -162,16 +190,24 @@ async function runner(io: Io, config: Config, args: string[]): Promise<number> {
         ...(gateway.limits ? { wrap: limitedBy(gateway.limits) } : {}),
       }));
     };
-    await runRunners({
-      targets,
-      once: values.once ?? false,
-      ...(config.workers === undefined ? {} : { workers: config.workers }),
-      retentionDays: config.retentionDays,
-      ...(io.signal ? { signal: io.signal } : {}),
-    });
+    const sayStopping = () => stopping(io, config);
+    io.signal?.addEventListener("abort", sayStopping, { once: true });
+    try {
+      await runRunners({
+        targets,
+        once: values.once ?? false,
+        graceMs: config.stopSeconds * 1000,
+        retentionDays: config.retentionDays,
+        ...(config.workers === undefined ? {} : { workers: config.workers }),
+        ...(io.signal ? { signal: io.signal } : {}),
+      });
+    } finally {
+      io.signal?.removeEventListener("abort", sayStopping);
+    }
   } finally {
     await server.close();
   }
+  if (io.signal?.aborted) io.out("Stopped");
   return 0;
 }
 

@@ -7,7 +7,7 @@ import { type Io, main } from "../src/cli.ts";
 import { readConfig } from "../src/config.ts";
 import { SqliteDatabase } from "../src/db/sqlite.ts";
 import { Store, WEB_CHAT } from "../src/store/store.ts";
-import { gated, reply } from "./web/support.ts";
+import { Gate, gated, reply } from "./web/support.ts";
 
 const TOKEN = "a-token-long-enough-for-tests";
 
@@ -122,6 +122,54 @@ describe("the command line", () => {
     expect(await session.json()).toEqual({ mode: "bearer", email: null });
     stop.abort();
     expect(await finished).toBe(0);
+  });
+
+  it("lets a running run finish when told to stop, refusing new requests meanwhile", async () => {
+    const stop = new AbortController();
+    const gate = new Gate();
+    const provider = gated([reply("finished while stopping")], { 0: gate });
+    const run = io(
+      { BOTT_STATE_DIR: folder(), BOTT_WEB_TOKEN: TOKEN, BOTT_PORT: "0" },
+      { signal: stop.signal, providers: () => provider },
+    );
+    const finished = main(["run"], run.io);
+    let address: string | undefined;
+    for (let tries = 0; tries < 200 && !address; tries++) {
+      address = /Serving on (http:\/\/\S+)/.exec(run.text())?.[1];
+      if (!address) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!address) throw new Error(`the server did not start: ${run.text()}`);
+    const auth = { authorization: `Bearer ${TOKEN}` };
+    const created = await fetch(`${address}/api/runs`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ text: "go" }),
+    });
+    const { id } = (await created.json()) as { id: string };
+    await gate.reached;
+    stop.abort();
+    for (let tries = 0; tries < 200 && !/Stopping/.test(run.text()); tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(run.text()).toMatch(/Stopping: no new work starts; running work has 30 s/);
+    const during = await fetch(`${address}/health`).then(
+      (response) => response.status,
+      () => "refused",
+    );
+    expect([503, "refused"]).toContain(during);
+    gate.release();
+    expect(await finished).toBe(0);
+    expect(run.lines.at(-1)).toBe("Stopped");
+
+    // The run ended by itself and was written down before the database closed.
+    const state = run.io.env.BOTT_STATE_DIR as string;
+    const db = new SqliteDatabase(join(state, "gateway.sqlite3"));
+    const rows = await db.query(
+      "SELECT r.answer, i.status FROM web_runs r JOIN inbox i ON i.id=r.inbox WHERE r.id=?",
+      [id],
+    );
+    await db.close();
+    expect(rows).toEqual([{ answer: "finished while stopping", status: "completed" }]);
   });
 
   it("runs the jobs that are due once and lets the next runner in", async () => {

@@ -20,6 +20,8 @@ const HOUR = 3600;
 const HANG = "\u0000hang";
 /** A scripted reply that fails the model call. */
 const FAIL = "\u0000fail";
+/** A scripted reply that answers "held" once the test lets it, or fails when stopped first. */
+const HOLD = "\u0000hold";
 /** A scripted reply that asks to write a file. */
 const WRITE = "\u0000write";
 const POLL = 0.005;
@@ -82,6 +84,10 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     };
     const prompts: string[] = [];
     let started: () => void = () => {};
+    let letGo: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
     const factory = (): ModelProvider => ({
       id: "fake",
       async *stream(req) {
@@ -97,6 +103,19 @@ describe.each(backends)("%s backend", (kind: Backend) => {
             req.signal.addEventListener("abort", () => resolve(), { once: true });
           });
           yield { type: "error", message: "aborted" };
+          return;
+        }
+        if (next === HOLD) {
+          started();
+          const stopped = new Promise<boolean>((resolve) => {
+            if (req.signal.aborted) resolve(true);
+            req.signal.addEventListener("abort", () => resolve(true), { once: true });
+          });
+          if (await Promise.race([stopped, held.then(() => false)])) {
+            yield { type: "error", message: "aborted" };
+            return;
+          }
+          yield* reply("held");
           return;
         }
         if (next === WRITE) {
@@ -125,7 +144,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       new Promise<void>((resolve) => {
         started = resolve;
       });
-    return { store, sessions, sink, prompts, hung };
+    return { store, sessions, sink, prompts, hung, letGo: () => letGo() };
   }
 
   async function setup(texts: string[] = [], settings: Partial<RuntimeConfig> = {}) {
@@ -148,7 +167,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       });
     const once = () =>
       runRunner({ ...parts, instance: "main", once: true, poll: POLL, owner: "runner-a" });
-    const loop = () => {
+    const loop = (graceMs?: number) => {
       const stop = new AbortController();
       stops.push(stop);
       const done = runRunner({
@@ -157,6 +176,7 @@ describe.each(backends)("%s backend", (kind: Backend) => {
         poll: POLL,
         owner: "runner-a",
         signal: stop.signal,
+        ...(graceMs === undefined ? {} : { graceMs }),
       });
       return { stop, done };
     };
@@ -517,6 +537,37 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(sink.texts()).toEqual([]);
     expect(await db.query("SELECT * FROM leases")).toEqual([]);
     expect(await db.query("SELECT * FROM scheduler_leases")).toEqual([]);
+  });
+
+  it("a stopped runner lets a running job finish within its grace and claims nothing more", async () => {
+    const { db, store, sink, addJob, loop, hung, letGo, clock } = await setup([HOLD, "later"]);
+    const id = await addJob();
+    const waiting = hung();
+    const runner = loop(60_000);
+    await waiting;
+    runner.stop.abort();
+    // Due while stopping, so only a runner that still claimed work would start it.
+    const other = await addJob({ task: "another", first: clock.get() - 1 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await store.job(id)).toMatchObject({ running: true });
+    letGo();
+    await runner.done;
+    expect(await store.job(id)).toMatchObject({ running: false, lastStatus: "completed" });
+    expect(sink.texts()).toEqual([expect.stringContaining("held")]);
+    expect(await store.job(other)).toMatchObject({ running: false, lastStatus: null });
+    expect(await db.query("SELECT * FROM leases")).toEqual([]);
+  });
+
+  it("a stopped runner interrupts a job that outlasts its grace", async () => {
+    const { store, sink, addJob, loop, hung } = await setup([HOLD]);
+    const id = await addJob();
+    const waiting = hung();
+    const runner = loop(30);
+    await waiting;
+    runner.stop.abort();
+    await runner.done;
+    expect(await store.job(id)).toMatchObject({ running: false, lastStatus: "interrupted" });
+    expect(sink.texts()).toEqual([]);
   });
 });
 

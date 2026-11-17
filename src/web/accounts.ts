@@ -103,8 +103,9 @@ export class AccountGateways {
       .some((gateway) => gateway.store.ctx.instance === instance && gateway.working());
   }
 
-  async close(): Promise<void> {
-    for (const gateway of this.runtimes.all()) await gateway.close();
+  /** Closes every account's gateway at once, so each gets the whole of `graceMs`. */
+  async close(graceMs = 0): Promise<void> {
+    await Promise.all(this.runtimes.all().map((gateway) => gateway.close(graceMs)));
     for (const db of this.files.splice(0)) await db.close();
   }
 }

@@ -42,8 +42,13 @@ export interface RunnerOptions {
   owner?: string;
   /** Most jobs running at once; more due jobs wait for a free place. */
   workers?: number;
-  /** Stops a runner that is not running once; its running jobs end interrupted. */
+  /**
+   * Stops a runner that is not running once: it claims nothing more, gives its running jobs
+   * `graceMs` to end by themselves, and interrupts those still going.
+   */
   signal?: AbortSignal;
+  /** Milliseconds running jobs may take to end once the runner is stopped; none by default. */
+  graceMs?: number;
   /** Runs each job's model work, as the instance's per-run spend and request limits need. */
   wrap?: <T>(work: () => Promise<T>) => Promise<T>;
   /** Days kept of finished message text, chat history and run records; kept forever when unset. */
@@ -81,7 +86,7 @@ export async function runRunner(opts: RunnerOptions): Promise<void> {
       await runner.pause();
     }
   } finally {
-    await runner.stop();
+    await runner.stop(opts.signal?.aborted ? (opts.graceMs ?? 0) : 0);
   }
 }
 
@@ -89,7 +94,7 @@ export async function runRunner(opts: RunnerOptions): Promise<void> {
 export type RunnerTarget = Pick<RunnerOptions, "store" | "sessions" | "sink" | "instance" | "wrap">;
 
 export interface RunnersOptions
-  extends Pick<RunnerOptions, "once" | "poll" | "ttl" | "workers" | "retentionDays"> {
+  extends Pick<RunnerOptions, "once" | "poll" | "ttl" | "workers" | "retentionDays" | "graceMs"> {
   /** The instances that should be covered now; asked again every `refresh` seconds. */
   targets: () => Promise<RunnerTarget[]>;
   /** Seconds between looks at which instances to cover. */
@@ -128,6 +133,7 @@ export async function runRunners(opts: RunnersOptions): Promise<void> {
     ttl: opts.ttl,
     workers: opts.workers,
     retentionDays: opts.retentionDays,
+    graceMs: opts.graceMs,
   };
   const settings = Object.fromEntries(
     Object.entries(shared).filter(([, value]) => value !== undefined),
@@ -288,8 +294,25 @@ class Runner {
     });
   }
 
-  /** Interrupts whatever still runs and gives up both holds. */
-  async stop(): Promise<void> {
+  /**
+   * Gives running jobs up to `graceMs` to end, still renewing both holds, then interrupts
+   * whatever still runs and gives up both holds.
+   */
+  async stop(graceMs = 0): Promise<void> {
+    const deadline = Date.now() + graceMs;
+    while (this.active.size > 0 && !this.lost && Date.now() < deadline) {
+      const left = Math.min(this.pollMs, deadline - Date.now());
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.settled(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, left);
+        }),
+      ]);
+      clearTimeout(timer);
+      // A hold lost while waiting means another runner owns the work now.
+      if (this.active.size > 0) await this.watch().catch(() => {});
+    }
     for (const running of this.active.values()) this.halt(running, "interrupted");
     await this.settled();
     if (this.lost) return;

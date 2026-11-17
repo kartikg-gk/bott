@@ -131,6 +131,7 @@ export class Dispatcher {
   private readonly watchMs: number;
   private watcher: NodeJS.Timeout | undefined;
   private watching = false;
+  private closed = false;
 
   constructor(
     private readonly store: Store,
@@ -164,6 +165,11 @@ export class Dispatcher {
     const next = this.ticking.then(() => this.dispatch());
     this.ticking = next.catch(() => {});
     return next;
+  }
+
+  /** Starts no more runs; those already going carry on until they end or are stopped. */
+  close(): void {
+    this.closed = true;
   }
 
   /** How many runs are in progress. */
@@ -280,6 +286,7 @@ export class Dispatcher {
   }
 
   private async dispatch(): Promise<number> {
+    if (this.closed) return 0;
     let started = 0;
     const chief = (await this.store.chief()).id;
     for (const item of await this.store.pending()) {

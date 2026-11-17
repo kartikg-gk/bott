@@ -72,11 +72,19 @@ async function send(response: Response, res: ServerResponse): Promise<void> {
   res.end();
 }
 
+export interface Listening {
+  port: number;
+  /** Takes no new connections and drops idle ones; requests under way carry on. */
+  stop(): void;
+  /** Stops, then cuts every connection still open. */
+  close(): Promise<void>;
+}
+
 /** Serves the handler on Node's HTTP server; port 0 picks a free one. */
 export async function serveNode(
   handler: RequestHandler,
   opts: { host: string; port: number },
-): Promise<{ port: number; close: () => Promise<void> }> {
+): Promise<Listening> {
   const server = createServer((req, res) => {
     void (async () => {
       let response: Response;
@@ -94,12 +102,18 @@ export async function serveNode(
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : opts.port;
+  let closed: Promise<void> | undefined;
+  const stop = () => {
+    closed ??= new Promise<void>((resolve) => server.close(() => resolve()));
+    server.closeIdleConnections();
+  };
   return {
     port,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
+    stop,
+    close: async () => {
+      stop();
+      server.closeAllConnections();
+      await closed;
+    },
   };
 }

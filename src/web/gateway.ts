@@ -49,6 +49,21 @@ export interface GatewayOptions {
   };
 }
 
+/** How long a stopped run gets to record how it ended before the gateway closes anyway. */
+const SETTLE_MS = 10_000;
+
+/** Waits for `work`, but no longer than `ms`. */
+async function within(ms: number, work: Promise<unknown>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    work.catch(() => {}),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
 /** One instance's whole runtime, as the web endpoints use it. */
 export class Gateway {
   private constructor(
@@ -225,12 +240,30 @@ export class Gateway {
     await this.dispatcher.tick();
   }
 
-  /** Ends live streams and stops the sessions; running work ends with them. */
-  async close(): Promise<void> {
+  /**
+   * Shuts the gateway down. It starts no new run, gives the runs and background agents going
+   * up to `graceMs` to end by themselves while their followers still watch, then stops the
+   * rest and waits for how each ended to be written down.
+   * Closing again waits for the first close.
+   */
+  close(graceMs = 0): Promise<void> {
+    this.closing ??= this.shut(graceMs);
+    return this.closing;
+  }
+
+  private closing: Promise<void> | undefined;
+
+  private async shut(graceMs: number): Promise<void> {
+    this.dispatcher.close();
+    if (graceMs > 0) {
+      await within(graceMs, Promise.all([this.dispatcher.idle(), this.agents.settled()]));
+    }
     this.channel.close();
     this.journal.close();
     await this.learning?.settled();
     await this.agents.stop();
     await this.sessions.close();
+    // An aborted run still records its end; a stuck one must not hold the process forever.
+    await within(SETTLE_MS, this.dispatcher.idle());
   }
 }
