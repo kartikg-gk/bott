@@ -17,8 +17,28 @@ export class SqliteDatabase implements Database {
   constructor(readonly path: string) {
     if (path !== ":memory:" && path !== "") mkdirSync(dirname(path), { recursive: true });
     this.connection = new BetterSqlite3(path, { timeout: BUSY_TIMEOUT_MS });
-    this.connection.pragma("journal_mode = WAL");
+    this.useWal();
     this.connection.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+
+  /**
+   * Switches the file to write-ahead logging. The switch needs the file to itself, and when
+   * another process opening it holds a lock too, SQLite reports busy at once rather than
+   * waiting, since neither could go on. So it is tried again for as long as a busy wait lasts.
+   */
+  private useWal(): void {
+    const until = Date.now() + BUSY_TIMEOUT_MS;
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (;;) {
+      try {
+        this.connection.pragma("journal_mode = WAL");
+        return;
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        if (code !== "SQLITE_BUSY" || Date.now() >= until) throw error;
+        Atomics.wait(pause, 0, 0, 10 + Math.random() * 40);
+      }
+    }
   }
 
   private execute(sql: string, params: Param[]): { rows: Row[]; changes: number } {
@@ -56,14 +76,16 @@ export class SqliteDatabase implements Database {
   }
 
   /**
-   * Runs several statements as one write transaction: either all of them land or none do.
-   * Used for schema steps, which the single-statement methods above cannot group.
+   * Runs `work` holding the file's write lock, as one transaction: either everything it wrote
+   * lands or none of it does. Another process wanting the lock waits for it, so what `work`
+   * reads is still true when it writes. Nothing else may use this connection meanwhile.
    */
-  async script(sql: string): Promise<void> {
+  async locked<T>(work: () => Promise<T>): Promise<T> {
     this.connection.exec("BEGIN IMMEDIATE");
     try {
-      this.connection.exec(sql);
+      const result = await work();
       this.connection.exec("COMMIT");
+      return result;
     } catch (error) {
       if (this.connection.inTransaction) this.connection.exec("ROLLBACK");
       throw error;

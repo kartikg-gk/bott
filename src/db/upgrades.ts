@@ -316,18 +316,30 @@ export function oldestUpgradable(): number {
   return first.lowest ?? first.reaches - 1;
 }
 
-/** Applies every step the file has not had yet, one transaction per step. */
+async function fileVersion(file: SqliteDatabase): Promise<number> {
+  return Number((await file.query("PRAGMA user_version"))[0]?.user_version ?? 0);
+}
+
+/**
+ * Applies every step the file has not had yet, one transaction per step. Each step reads the
+ * version again once it holds the write lock: another process opening the same file may have
+ * taken the step meanwhile, and then it is passed over instead of applied twice.
+ */
 export async function applyUpgrades(file: SqliteDatabase, from: number): Promise<void> {
-  const facts: FileFacts = {
-    from,
-    async columns(table) {
-      const rows = await file.query(`SELECT name FROM pragma_table_info('${table}')`);
-      return new Set(rows.map((row) => String(row.name)));
-    },
-  };
   for (const step of UPGRADES) {
     if (from >= step.reaches) continue;
-    const body = (await step.statements(facts)).map((statement) => `${statement};\n`).join("");
-    await file.script(`${body}PRAGMA user_version = ${step.reaches};`);
+    await file.locked(async () => {
+      const now = await fileVersion(file);
+      if (now >= step.reaches) return;
+      const facts: FileFacts = {
+        from: now,
+        async columns(table) {
+          const rows = await file.query(`SELECT name FROM pragma_table_info('${table}')`);
+          return new Set(rows.map((row) => String(row.name)));
+        },
+      };
+      for (const statement of await step.statements(facts)) await file.run(statement);
+      await file.run(`PRAGMA user_version = ${step.reaches}`);
+    });
   }
 }

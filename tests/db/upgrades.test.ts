@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import BetterSqlite3 from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureSchema, SCHEMA_VERSION } from "../../src/db/schema.ts";
@@ -240,6 +242,45 @@ describe("upgrading a SQLite file from an older schema", () => {
       }
     },
   );
+
+  it("lets several processes open the same old file at once", async () => {
+    const path = olderFile(1);
+    const before = allRows(path);
+    const start = Date.now() + 1500;
+    const worker = fileURLToPath(new URL("./upgradeWorker.ts", import.meta.url));
+    const runs = Array.from(
+      { length: 4 },
+      () =>
+        new Promise<{ code: number | null; output: string }>((done) => {
+          const child = spawn(process.execPath, ["--import", "tsx", worker, path, String(start)], {
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          let output = "";
+          child.stdout.on("data", (chunk) => {
+            output += chunk;
+          });
+          child.stderr.on("data", (chunk) => {
+            output += chunk;
+          });
+          child.on("close", (code) => done({ code, output }));
+        }),
+    );
+    for (const run of await Promise.all(runs)) {
+      expect(run, run.output).toMatchObject({ code: 0, output: "upgraded\n" });
+    }
+    const db = new BetterSqlite3(path, { readonly: true });
+    try {
+      expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+      expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
+    } finally {
+      db.close();
+    }
+    const after = allRows(path);
+    expect(asSet(after.inbox ?? [], Object.keys(before.inbox?.[0] ?? {}))).toEqual(
+      asSet(before.inbox ?? [], Object.keys(before.inbox?.[0] ?? {})),
+    );
+    expect(shape(path)).toEqual(await currentShape());
+  }, 60_000);
 
   it("makes no copy of a new or an up-to-date file", async () => {
     const place = folder();
