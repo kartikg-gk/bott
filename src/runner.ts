@@ -205,12 +205,14 @@ class Runner {
   private async run(running: Running): Promise<void> {
     const { job } = running;
     const { store, sessions } = this.opts;
-    const route = await store.conversation(job.chat, job.user, job.thread);
     const claimedAt = job.lastRun as number;
     let status = "interrupted";
     let answer = "";
     let delegation: number | null = null;
+    let route: Route | undefined;
+    // From the claim on, every failure ends below, so the job is never left claimed.
     try {
+      route = await store.conversation(job.chat, job.user, job.thread);
       const bot = await store.bot(job.bot);
       if (!bot) throw new CannotRun("The bot for this job was removed.");
       if (!bot.chief) {
@@ -238,9 +240,13 @@ class Runner {
     } catch (error) {
       if (error instanceof BotBusy) {
         // The bot is working elsewhere: nothing ran, so the job waits for a later look.
-        if (delegation !== null) await store.dropDelegation(delegation);
-        delegation = null;
-        if (await store.releaseJob(job)) return;
+        try {
+          if (delegation !== null) await store.dropDelegation(delegation);
+          delegation = null;
+          if (await store.releaseJob(job)) return;
+        } catch {
+          // It could not be handed back, so it ends here rather than staying claimed.
+        }
         status = running.reason ?? "interrupted";
       } else if (running.reason !== null) {
         status = running.reason;
@@ -254,7 +260,10 @@ class Runner {
       }
     } finally {
       if (delegation !== null) {
-        await store.finishDelegation(delegation, status as DelegationStatus, answer);
+        // Recovery closes a delegation left running; the job itself must still end.
+        await store
+          .finishDelegation(delegation, status as DelegationStatus, answer)
+          .catch(() => {});
       }
     }
     await store.finishJob(job.id, status, answer.slice(0, MAX_ANSWER), { claimedAt });
@@ -267,7 +276,7 @@ class Runner {
   }
 
   /** Tells the conversation something went wrong, if it can be told. */
-  private async notify(route: Route, text: string): Promise<void> {
-    await this.opts.sink.send(route, text).catch(() => {});
+  private async notify(route: Route | undefined, text: string): Promise<void> {
+    if (route) await this.opts.sink.send(route, text).catch(() => {});
   }
 }

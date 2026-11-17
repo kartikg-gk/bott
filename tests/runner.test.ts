@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelProvider, StreamEvent } from "../src/agent/providers/types.ts";
 import { emptyUsage } from "../src/agent/transcript.ts";
 import type { Database } from "../src/db/database.ts";
@@ -249,6 +249,27 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(after?.lastAnswer).toContain("the model is down");
     expect(sink.texts()).toHaveLength(1);
     expect(sink.texts()[0]).toMatch(new RegExp(`^Job #${id} \\(${chief.name}\\), failed:\\n`));
+  });
+
+  it("a job whose conversation cannot be read finishes failed instead of staying claimed", async () => {
+    const { store, sink, addJob, once, prompts } = await setup(["never used"]);
+    const id = await addJob();
+    const lookup = vi
+      .spyOn(store, "conversation")
+      .mockRejectedValueOnce(new Error("the database is unreachable"));
+    try {
+      await once();
+    } finally {
+      lookup.mockRestore();
+    }
+    expect(await store.job(id)).toMatchObject({
+      status: "active",
+      running: false,
+      lastStatus: "failed",
+      nextRun: NOW + HOUR,
+    });
+    expect(prompts).toEqual([]);
+    expect(sink.texts()).toEqual([]);
   });
 
   it("a job whose bot is busy elsewhere waits for a later tick and is not marked failed", async () => {
