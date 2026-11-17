@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "bott": "dist/src/bin.js"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -11,6 +14,7 @@
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p .",
+    "start": "node dist/src/bin.js run",
     "mem0:check": "tsx scripts/mem0-check.ts"
   },
   "devDependencies": {
