@@ -191,6 +191,37 @@ describe("AgentSession", () => {
     expect(result).toMatchObject({ role: "tool", content: [text("photo sent")] });
   });
 
+  it("an unattended session refuses a reviewed tool at once, even under auto", async () => {
+    const provider = fakeProvider([
+      reply([call("h1", "send_mail", { to: "x" })]),
+      reply([text("could not send")]),
+    ]);
+    const asked: unknown[] = [];
+    const session = await open("s5b", provider, {
+      hostTools: [
+        {
+          name: "send_mail",
+          description: "send",
+          input: z.object({ to: z.string() }),
+          readOnly: false,
+          review: true,
+        },
+      ],
+      answerHostTool: async (c) => {
+        asked.push(c);
+        return { content: [text("sent")] };
+      },
+      policy: "auto",
+      unattended: true,
+    });
+    await session.request("prompt", { message: "send" });
+    const seen = await untilSettled(session);
+    expect(seen.some((e) => e.type === "approval_requested")).toBe(false);
+    expect(asked).toEqual([]);
+    const result = provider.requests[1]?.messages.at(-1);
+    expect(JSON.stringify(result)).toContain("send_mail needs approval, and nobody can give it");
+  });
+
   it("abort kills the running command and settles", async () => {
     let killed = false;
     const slow: ToolSpec = {

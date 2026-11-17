@@ -300,19 +300,15 @@ describe.each(backends)("%s backend", (kind: Backend) => {
     expect(sink.texts()[0]).toMatch(new RegExp(`^Job #${id} \\(${chief.name}\\), failed:\\n`));
   });
 
-  it("an unanswered approval in a job run is denied by its deadline", async () => {
-    const { store, sessions, sink, chief, addJob, once, clock } = await setup(
+  it("a job run refuses a call that needs approval at once, since nobody can answer", async () => {
+    const { store, sessions, sink, chief, addJob, once, prompts } = await setup(
       [WRITE, "could not write"],
-      { policy: "ask", approvalSeconds: 1 },
+      // A deadline far off: waiting for it would outlast the test.
+      { policy: "ask", approvalSeconds: 3600 },
     );
     const id = await addJob({ spec: "once" });
-    // Nobody is there to answer while the clock moves on.
-    const ticking = setInterval(() => clock.set(clock.get() + 1), 50);
-    try {
-      await once();
-    } finally {
-      clearInterval(ticking);
-    }
+    await once();
+    expect(prompts[1]).toContain("needs approval, and nobody can give it during a scheduled run");
     const bot = (await store.bot(chief.id)) as Bot;
     expect(existsSync(join(sessions.workspaceFor(bot).root, "a.txt"))).toBe(false);
     expect(await store.job(id)).toMatchObject({ running: false, lastStatus: "completed" });

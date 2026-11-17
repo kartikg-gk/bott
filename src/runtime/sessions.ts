@@ -408,6 +408,8 @@ export class SessionManager {
       readOnly: boolean;
       signal: AbortSignal;
       detached?: boolean;
+      /** Nobody can answer approvals during this run, so calls needing one are refused. */
+      unattended?: boolean;
     },
   ): Promise<Answer> {
     const target = await this.store.bot(bot.id);
@@ -429,6 +431,7 @@ export class SessionManager {
       readOnly: boolean;
       signal?: AbortSignal;
       detached?: boolean;
+      unattended?: boolean;
     },
   ): Promise<Answer> {
     const releaseBot = await this.holdBot(target.id, false);
@@ -456,6 +459,7 @@ export class SessionManager {
         model: this.config.model,
         policy: opts.policy,
         route,
+        unattended: opts.unattended === true,
       });
       live.busy = true;
       this.delegations.add(live);
@@ -699,7 +703,7 @@ export class SessionManager {
     built: Built,
     id: string,
     sessionFile: string | null,
-    opts: { model: string; policy?: Policy | undefined; route: Route },
+    opts: { model: string; policy?: Policy | undefined; route: Route; unattended?: boolean },
   ): Promise<Live> {
     const provider = this.providers(bot, built.profile);
     const { route } = opts;
@@ -752,6 +756,7 @@ export class SessionManager {
       ...(this.config.approvalSeconds === undefined
         ? {}
         : { approvalSeconds: this.config.approvalSeconds }),
+      ...(opts.unattended ? { unattended: true } : {}),
     });
     return new Live(session, bot.id, built.signature, sessionFile, this.now());
   }

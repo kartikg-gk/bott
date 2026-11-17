@@ -100,7 +100,16 @@ export interface SessionOptions {
   clock?: () => number;
   /** How long an approval waits for an answer before it is denied. */
   approvalSeconds?: number;
+  /**
+   * Nobody watches this session's runs, as in a scheduled job. A call that would wait for an
+   * approval is refused at once, with a reason the model can read, instead of waiting out
+   * the deadline.
+   */
+  unattended?: boolean;
 }
+
+/** Why a call that needs approval is refused in an unattended run. */
+export const NOBODY_TO_ASK = "needs approval, and nobody can give it during a scheduled run";
 
 /** How long an approval waits for an answer when the session is not told otherwise. */
 export const APPROVAL_SECONDS = 300;
@@ -379,10 +388,16 @@ export class AgentSession {
         steering: () => this.steering.splice(0),
         followUps: () => this.followUps.splice(0),
         // A reviewed tool asks every time; it is refused outright only when the policy denies.
-        beforeToolCall: (call) =>
-          this.reviewed.has(call.name) && policy !== "deny"
+        beforeToolCall: (call) => {
+          const reviewed = this.reviewed.has(call.name) && policy !== "deny";
+          const asks = reviewed || (policy === "ask" && !this.readOnly.has(call.name));
+          if (asks && this.opts.unattended === true) {
+            return Promise.resolve({ allow: false, reason: `${call.name} ${NOBODY_TO_ASK}.` });
+          }
+          return reviewed
             ? makeBeforeToolCall("ask", ask, this.readOnly, this.opts.windowsShell)(call)
-            : decide(call),
+            : decide(call);
+        },
         beforeModelRequest: (messages) => this.compactIfFull(messages, text),
         cacheKey: this.opts.id,
       })) {

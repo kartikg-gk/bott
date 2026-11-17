@@ -227,6 +227,7 @@ class Runner {
       const result = await sessions.background(route, bot, job.task, {
         readOnly: false,
         signal: running.controller.signal,
+        unattended: true,
       });
       answer = result.text;
       status = running.reason ?? result.outcome;
