@@ -17,6 +17,7 @@ import { AppConnections } from "./apps/connections.ts";
 import { type Config, ConfigError, type Env, PROVIDER_KEYS } from "./config.ts";
 import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { ensureSchema } from "./db/schema.ts";
+import { databaseStatus } from "./db/status.ts";
 import { ModelLimits } from "./limits/limits.ts";
 import type { ProviderFactory, RuntimeConfig } from "./runtime/sessions.ts";
 import { setTraceExporter, TraceExporter } from "./tracing.ts";
@@ -120,6 +121,7 @@ async function tokenServer(config: Config, db: Database, opts: StartOptions): Pr
   const handler = createApp({
     auth: { mode: "token", token, gateway },
     proxySecret: config.proxySecret,
+    health: () => databaseStatus(db),
   });
   return {
     config,
@@ -199,6 +201,7 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       auth: { mode: "google", login, models, gateway: (account) => built.gateway(account) },
       proxySecret: config.proxySecret,
       apps,
+      health: () => databaseStatus(db),
     });
     return {
       config,

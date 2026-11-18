@@ -19,7 +19,11 @@
  * - PUT  /api/account/model       { provider, model, key? } -> same shape as GET
  * - DELETE /api/account/keys/:provider -> same shape as GET
  *
- * With BOTT_PROXY_SECRET set, every request must carry it in `X-Bott-Proxy`.
+ * Either mode, with no sign-in:
+ * - GET  /health                  -> { status: "ok", database: "answers", schema: string | null }
+ *                                    or 503 { status: "unavailable", database: "does not answer" }
+ *
+ * With BOTT_PROXY_SECRET set, every request must carry it in `X-Bott-Proxy`, /health included.
  */
 
 import { timingSafeEqual } from "node:crypto";
@@ -50,6 +54,19 @@ export const PLACEHOLDER_PAGE =
   '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>bott</title></head>' +
   "<body><p>The interface for this server is on its way. The API is running.</p></body></html>";
 
+/** Why a proxy secret is too weak to use, or null when it will do. */
+export function proxySecretProblem(secret: string): string | null {
+  return PROXY_SECRET.test(secret)
+    ? null
+    : `${PROXY_SECRET_VARIABLE} must be 43 to 128 URL-safe base64 characters`;
+}
+
+/** Asks the database to answer and names the schema it holds; throws when it cannot. */
+export type HealthProbe = () => Promise<{ schema: string | null }>;
+
+/** How long /health waits for the database before calling it down. */
+const HEALTH_WAIT_MS = 5000;
+
 /** One person on this machine, unlocked with a bearer token. */
 export interface TokenAuth {
   mode: "token";
@@ -73,6 +90,10 @@ export interface AppOptions {
   page?: string;
   /** Connected apps; none until the apps layer is part of the build. */
   apps?: AppsSeam;
+  /** Checks the database for /health; without it /health only says the server is up. */
+  health?: HealthProbe;
+  /** How long /health waits for the probe, in milliseconds. */
+  healthWaitMs?: number;
 }
 
 /** Every API route, for whichever gateway a request is resolved to. */
@@ -118,9 +139,8 @@ const APP_CALLBACK = /^\/auth\/apps\/([a-z0-9_-]+)\/callback$/;
 /** The request handler for the page and the API, in either sign-in mode. */
 export function createApp(opts: AppOptions): (request: Request) => Promise<Response> {
   const { auth } = opts;
-  if (opts.proxySecret !== undefined && !PROXY_SECRET.test(opts.proxySecret)) {
-    throw new Error(`${PROXY_SECRET_VARIABLE} must be 43 to 128 URL-safe base64 characters`);
-  }
+  const weak = opts.proxySecret === undefined ? null : proxySecretProblem(opts.proxySecret);
+  if (weak) throw new Error(weak);
   const router = apiRouter();
   if (auth.mode === "google") accountRoutes(router, auth.models);
   (opts.apps ?? NO_APPS).routes(router);
@@ -129,6 +149,26 @@ export function createApp(opts: AppOptions): (request: Request) => Promise<Respo
     new Response(opts.page ?? PLACEHOLDER_PAGE, {
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     });
+
+  /** Up or not, and which schema; never a path, an error text or anything about an account. */
+  async function health(request: Request): Promise<Response> {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return fresh({ error: "That method is not allowed here" }, 405);
+    }
+    if (!opts.health) return fresh({ status: "ok" });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("late")), opts.healthWaitMs ?? HEALTH_WAIT_MS);
+    });
+    try {
+      const { schema } = await Promise.race([opts.health(), late]);
+      return fresh({ status: "ok", database: "answers", schema });
+    } catch {
+      return fresh({ status: "unavailable", database: "does not answer" }, 503);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function api(request: Request, path: string, ctx: Ctx): Promise<Response> {
     const found = router.match(request.method, path);
@@ -199,6 +239,8 @@ export function createApp(opts: AppOptions): (request: Request) => Promise<Respo
         }
       }
       const path = new URL(request.url).pathname;
+      // Probes from a load balancer or uptime check name whatever host they like.
+      if (path === "/health") return await health(request);
       return auth.mode === "google"
         ? await google(request, path, auth)
         : await local(request, path, auth);

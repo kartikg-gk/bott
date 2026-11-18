@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { BotApps } from "../src/apps/access.ts";
 import { readConfig } from "../src/config.ts";
+import { SCHEMA_MARK } from "../src/db/status.ts";
 import { type Server, startServer, tokenProvider } from "../src/startup.ts";
 import { KEY } from "./support/accounts.ts";
 import { backends, database } from "./support/fakeD1.ts";
@@ -48,6 +49,12 @@ describe.each(backends)("%s backend", (kind) => {
     const gateways = await server.gateways();
     expect(gateways).toHaveLength(1);
     expect(gateways[0]?.store.ctx.instance).toBe(readConfig({ BOTT_STATE_DIR: root }).instance);
+    const health = await server.handler(new Request("http://localhost/health"));
+    expect(await health.json()).toEqual({
+      status: "ok",
+      database: "answers",
+      schema: SCHEMA_MARK,
+    });
     // A runner puts each job inside these limits, as the web puts each run.
     expect(gateways[0]?.limits).toBeDefined();
   });
@@ -79,6 +86,10 @@ describe.each(backends)("%s backend", (kind) => {
       );
     expect(await (await ask("/auth/session")).json()).toEqual({ mode: "google", email: null });
     expect((await ask("/api/bots")).status).toBe(401);
+    expect(await (await ask("/health")).json()).toMatchObject({
+      status: "ok",
+      schema: SCHEMA_MARK,
+    });
     const login = await ask("/auth/login");
     expect(login.status).toBe(302);
     expect(login.headers.get("location")).toMatch(/^https:\/\/accounts\.google\.com\//);
