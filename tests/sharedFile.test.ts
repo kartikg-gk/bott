@@ -200,6 +200,27 @@ describe("a database file written before the switch", () => {
   );
 
   it.each(backends)(
+    "reads the notes and skills kept in the database by a hosted gateway (%s)",
+    async (kind) => {
+      const { db, root } = copy(kind);
+      const { get } = await gateway(db, root, [], true);
+      const researcher = await botId(db, "Researcher");
+      expect(await get(`/api/bots/${researcher}/memory`)).toEqual({
+        "PREFERENCES.md": "Prefers metric units.\n",
+        "KNOWLEDGE.md": "The owner lives in Goa.\n",
+      });
+      const skill = (await get(`/api/bots/${researcher}/skills/tides`)) as {
+        files: Record<string, string>;
+      };
+      expect(skill.files).toEqual({
+        "SKILL.md":
+          "---\nname: tides\ndescription: Reads tide tables\n---\nLook up the port first.\n",
+        "data/ports.txt": "Panaji\nVasco\n",
+      });
+    },
+  );
+
+  it.each(backends)(
     "reads jobs with the statuses, last runs and next runs they were left with (%s)",
     async (kind) => {
       const { db, root } = copy(kind);

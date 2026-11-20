@@ -54,8 +54,15 @@ async function whileIdle(ctx: Ctx, bot: Bot | null, change: () => void): Promise
   sessions.restartIdle(bot?.id);
 }
 
+/** Brings the folders up to date with what a hosted server stored. */
+async function current(ctx: Ctx, bot: Bot | null): Promise<void> {
+  await ctx.gateway.folders.fill(null);
+  if (bot) await ctx.gateway.folders.fill(bot);
+}
+
 async function catalog(ctx: Ctx, _request: Request, params: Record<string, string>) {
   const bot = await scope(ctx, params);
+  await current(ctx, bot);
   const own = folderFor(ctx, bot);
   // A bot sees its own skills first and the shared ones after; its own win on a name clash.
   const dirs = bot ? [own.root, sharedSkills(ctx)] : [own.root];
@@ -70,6 +77,7 @@ async function catalog(ctx: Ctx, _request: Request, params: Record<string, strin
 
 async function read(ctx: Ctx, _request: Request, params: Record<string, string>) {
   const bot = await scope(ctx, params);
+  await current(ctx, bot);
   try {
     return fresh({ name: params.name, files: folderFor(ctx, bot).read(params.name as string) });
   } catch (error) {
@@ -85,14 +93,18 @@ async function save(ctx: Ctx, request: Request, params: Record<string, string>) 
     throw new HttpError(400, "Send a skill name and its files");
   }
   const name = body.name;
+  await current(ctx, bot);
   await whileIdle(ctx, bot, () => folderFor(ctx, bot).write(name, body.files));
+  await ctx.gateway.folders.keep(bot);
   return fresh({ saved: name });
 }
 
 async function remove(ctx: Ctx, _request: Request, params: Record<string, string>) {
   const bot = await scope(ctx, params);
   const name = params.name as string;
+  await current(ctx, bot);
   await whileIdle(ctx, bot, () => folderFor(ctx, bot).remove(name));
+  await ctx.gateway.folders.keep(bot);
   return fresh({ deleted: name });
 }
 
@@ -102,6 +114,7 @@ function notesDir(ctx: Ctx, bot: Bot): string {
 
 async function readNotes(ctx: Ctx, _request: Request, params: Record<string, string>) {
   const bot = (await scope(ctx, params)) as Bot;
+  await ctx.gateway.folders.fill(bot);
   const dir = notesDir(ctx, bot);
   const notes: Record<string, string> = {};
   for (const file of MEMORY_FILES) {
@@ -124,11 +137,13 @@ async function writeNote(ctx: Ctx, request: Request, params: Record<string, stri
   if (Buffer.byteLength(text, "utf8") > FILE_LIMIT || text.includes("\0")) {
     throw new HttpError(400, "A note holds at most 256 KB of text");
   }
+  await ctx.gateway.folders.fill(bot);
   await whileIdle(ctx, bot, () => {
     const dir = notesDir(ctx, bot);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, file as string), text, "utf8");
   });
+  await ctx.gateway.folders.keep(bot);
   return fresh({ saved: file });
 }
 

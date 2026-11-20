@@ -21,6 +21,7 @@ import type { ToolSpec } from "../agent/tools.ts";
 import { type TranscriptEntry, textOf } from "../agent/transcript.ts";
 import { type BotApps, LOAD_PLUGIN } from "../apps/access.ts";
 import { type Bot, botRoot, MEMORY_FILES, systemAddition, workspaceDir } from "../bots/bots.ts";
+import type { FolderMirror } from "../bots/folders.ts";
 import {
   type Profile,
   profile,
@@ -188,6 +189,8 @@ export class SessionManager {
   approvals: ApprovalRelay | undefined;
   /** The apps bots may use; set by whatever composes the server. Without it bots get no apps. */
   apps: BotApps | undefined;
+  /** Where a hosted server keeps bot notes and skills; filled into the folders before a build. */
+  folders: FolderMirror | undefined;
 
   constructor(
     private readonly config: RuntimeConfig,
@@ -654,6 +657,8 @@ export class SessionManager {
 
   /** Creates the bot's folders and gathers its prompt, tools and skills. */
   private async build(bot: Bot): Promise<Built> {
+    await this.folders?.fill(null);
+    await this.folders?.fill(bot);
     const root = botRoot(this.config.stateDir, bot);
     const notesDir = join(root, "memory");
     mkdirSync(notesDir, { recursive: true });

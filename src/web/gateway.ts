@@ -1,5 +1,6 @@
 import { HttpError } from "../accounts/http.ts";
 import type { Account } from "../accounts/store.ts";
+import { FolderMirror } from "../bots/folders.ts";
 import type { ComputerFactory } from "../computers/index.ts";
 import type { Database } from "../db/database.ts";
 import type { ModelLimits } from "../limits/limits.ts";
@@ -65,11 +66,15 @@ export class Gateway {
     readonly memory: MemoryControls,
     /** Recall and learning around each exchange, when memory is on. */
     readonly learning: MemoryRuntime | undefined,
+    /** Bot notes and skills, kept in the database when hosted. */
+    readonly folders: FolderMirror,
   ) {}
 
   static async open(opts: GatewayOptions): Promise<Gateway> {
     const store = await Store.open(opts.db, opts.instance, opts.clock ? { clock: opts.clock } : {});
     const sessions = new SessionManager(opts.runtime, store, opts.providers, opts.computers);
+    const folders = new FolderMirror(store, opts.runtime.stateDir, opts.hosted ?? false);
+    sessions.folders = folders;
     const journal = new RunJournal(store);
     const { limits } = opts;
     const channel = new WebChannel(journal);
@@ -143,6 +148,7 @@ export class Gateway {
       opts.requireAccountModel ?? false,
       new MemoryControls(store, memory, project),
       learning,
+      folders,
     );
   }
 

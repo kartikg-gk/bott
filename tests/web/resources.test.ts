@@ -94,4 +94,44 @@ describe("skills and notes", () => {
     expect(provider.requests[0]?.system).toContain("tidy");
     expect(provider.requests[0]?.system).toContain("The build runs nightly.");
   });
+
+  it("keeps a hosted gateway's notes and skills in the database, not only on its disk", async () => {
+    h = new Harness("d1");
+    const db = h.database();
+    const first = await h.gateway(gated([]), { db, hosted: true });
+    const ada = await first.store.createBot({ name: "Ada", role: "r" });
+    const one = h.app(first).call;
+    await one(`/api/bots/${ada.id}/memory`, {
+      method: "PUT",
+      json: { file: "PREFERENCES.md", text: "Short answers." },
+    });
+    await one(`/api/bots/${ada.id}/skills`, {
+      method: "POST",
+      json: { name: "papers", files: { "SKILL.md": skill("papers"), "notes/a.txt": "a" } },
+    });
+    await one("/api/skills", {
+      method: "POST",
+      json: { name: "tidy", files: { "SKILL.md": skill("tidy") } },
+    });
+    await one("/api/skills/tidy", { method: "DELETE" });
+
+    // A second request lands on a machine with empty folders and the same database.
+    const provider = gated([reply("ok")]);
+    const second = await h.gateway(provider, { db, hosted: true });
+    const two = h.app(second).call;
+    const notes = (await (await two(`/api/bots/${ada.id}/memory`)).json()) as Record<
+      string,
+      string
+    >;
+    expect(notes["PREFERENCES.md"]).toBe("Short answers.");
+    expect(await (await two(`/api/bots/${ada.id}/skills/papers`)).json()).toEqual({
+      name: "papers",
+      files: { "SKILL.md": skill("papers"), "notes/a.txt": "a" },
+    });
+    expect(await (await two("/api/skills")).json()).toEqual([]);
+    await two("/api/runs", { method: "POST", json: { text: "hi", bot: ada.id } });
+    await second.dispatcher.idle();
+    expect(provider.requests[0]?.system).toContain("Short answers.");
+    expect(provider.requests[0]?.system).toContain("papers");
+  });
 });
