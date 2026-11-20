@@ -4,19 +4,17 @@
  * runs the same from the shell and from tests.
  */
 
-import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
-import { CLIENT_ID_VARIABLE, CLIENT_SECRET_VARIABLE } from "./accounts/google.ts";
 import { TOKEN_VARIABLE } from "./accounts/localToken.ts";
-import { MASTER_KEY_VARIABLE, masterKey } from "./accounts/sealing.ts";
+import { MASTER_KEY_VARIABLE } from "./accounts/sealing.ts";
 import { ExtraError, skills, task } from "./cliExtra.ts";
-import { type Config, ConfigError, type Env, PROVIDER_KEYS, readConfig } from "./config.ts";
+import { type Config, ConfigError, type Env, readConfig } from "./config.ts";
 import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
-import { databaseStatus, SCHEMA_MARK } from "./db/status.ts";
 import { checkDatabase, ImportError, importAccounts, importLocal } from "./db/transfer.ts";
+import { type DoctorIo, doctor, type Probe } from "./doctor.ts";
 import type { ModelLimits } from "./limits/limits.ts";
 import { runRunners } from "./runner.ts";
 import type { ProviderFactory } from "./runtime/sessions.ts";
@@ -35,6 +33,10 @@ export interface Io {
   providers?: ProviderFactory;
   /** Reads what was piped in, for a task given as `-`. */
   stdin?: () => Promise<string>;
+  /** How `doctor` runs programs such as docker and pdftotext; tests stand one in. */
+  probe?: Probe;
+  /** The database `doctor` checks, in place of the configured one. */
+  database?: DoctorIo["database"];
 }
 
 const USAGE = [
@@ -173,83 +175,6 @@ async function runner(io: Io, config: Config, args: string[]): Promise<number> {
   return 0;
 }
 
-async function doctor(io: Io, config: Config, args: string[]): Promise<number> {
-  parseArgs({ args, options: {} });
-  const { env } = io;
-  const problems: string[] = [];
-  const good = (line: string) => io.out(`ok    ${line}`);
-  const bad = (line: string) => {
-    problems.push(line);
-    io.out(`fix   ${line}`);
-  };
-  good(
-    `${config.hosted ? "Hosted" : "On this machine"}, ${config.auth} sign-in, instance ${config.instance}`,
-  );
-
-  const db = existingDatabase(config, env);
-  if (!db) {
-    bad(`No database at ${config.databasePath} yet; run bott init`);
-  } else {
-    try {
-      const status = await databaseStatus(db);
-      const line = `${status.backend}: answers, schema ${status.schema ?? "not made yet"}`;
-      if (status.schema === SCHEMA_MARK) good(line);
-      else bad(`${line}; this build expects ${SCHEMA_MARK}`);
-    } catch (error) {
-      bad(`The database did not answer: ${(error as Error).message}`);
-    } finally {
-      await db.close();
-    }
-  }
-
-  if (config.auth === "token") {
-    if ((env[TOKEN_VARIABLE] ?? "").length >= 16) good(`${TOKEN_VARIABLE} is set`);
-    else bad(`Set ${TOKEN_VARIABLE} to 16 characters or more (bott init makes one)`);
-    if (!config.provider || !config.model) {
-      bad("Set BOTT_PROVIDER and BOTT_MODEL so bots have a model to talk to");
-    } else if (!env[PROVIDER_KEYS[config.provider] as string]?.trim()) {
-      bad(`Set ${PROVIDER_KEYS[config.provider]} for the ${config.provider} provider`);
-    } else {
-      good(`Model ${config.provider}/${config.model}`);
-    }
-  } else {
-    try {
-      masterKey(env);
-      good(`${MASTER_KEY_VARIABLE} is set`);
-    } catch (error) {
-      bad((error as Error).message);
-    }
-    if (config.origin) good(`Origin ${config.origin}`);
-    else bad("Set BOTT_ORIGIN to the page's public origin");
-    if (env[CLIENT_ID_VARIABLE] && env[CLIENT_SECRET_VARIABLE]) good("Google client is set");
-    else bad(`Set ${CLIENT_ID_VARIABLE} and ${CLIENT_SECRET_VARIABLE}`);
-    if (config.allowedEmails.length + config.allowedDomains.length > 0) {
-      good("Someone is allowed to sign in");
-    } else {
-      bad("Set BOTT_ALLOWED_EMAILS or BOTT_ALLOWED_DOMAINS");
-    }
-  }
-
-  if (config.computer.executor === "docker") {
-    const found = spawnSync("docker", ["version", "--format", "{{.Server.Version}}"], {
-      timeout: 10_000,
-      encoding: "utf8",
-    });
-    if (found.status === 0) good(`Docker ${found.stdout.trim()} answers`);
-    else bad("Docker does not answer; start it or choose another BOTT_EXECUTOR");
-  } else if (config.computer.executor === "daytona") {
-    if (env.DAYTONA_API_KEY) good("DAYTONA_API_KEY is set");
-    else bad("Set DAYTONA_API_KEY for the daytona executor");
-  }
-  if (config.memory.enabled) {
-    if (env.OPENAI_API_KEY || env.OPENAI_BASE_URL) good("Memory has an embeddings service");
-    else bad("Memory needs OPENAI_API_KEY (or OPENAI_BASE_URL) for embeddings");
-  }
-
-  io.out(problems.length === 0 ? "Everything needed is in place." : `${problems.length} to fix.`);
-  return problems.length === 0 ? 0 : 1;
-}
-
 async function db(io: Io, config: Config, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
@@ -310,7 +235,16 @@ async function db(io: Io, config: Config, args: string[]): Promise<number> {
 
 type Command = (io: Io, config: Config, args: string[]) => Promise<number>;
 
-const COMMANDS: Record<string, Command> = { init, run, runner, doctor, db, task, skills };
+const COMMANDS: Record<string, Command> = {
+  init,
+  run,
+  runner,
+  // Never called with a config: main hands the doctor the raw settings (see below).
+  doctor: (io) => doctor(io),
+  db,
+  task,
+  skills,
+};
 
 /** Runs one command and returns the exit code: 0 done, 1 failed, 2 not understood. */
 export async function main(argv: string[], io: Io): Promise<number> {
@@ -324,6 +258,11 @@ export async function main(argv: string[], io: Io): Promise<number> {
     return name === undefined || !["-h", "--help", "help"].includes(name) ? 2 : 0;
   }
   try {
+    // The doctor reads the settings itself, so it can list every bad one rather than the first.
+    if (name === "doctor") {
+      parseArgs({ args: rest, options: {} });
+      return await doctor(io);
+    }
     return await command(io, readConfig(io.env), rest);
   } catch (error) {
     if (
