@@ -7,14 +7,15 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
 import { CLIENT_ID_VARIABLE, CLIENT_SECRET_VARIABLE } from "./accounts/google.ts";
 import { TOKEN_VARIABLE } from "./accounts/localToken.ts";
 import { MASTER_KEY_VARIABLE, masterKey } from "./accounts/sealing.ts";
 import { type Config, ConfigError, type Env, PROVIDER_KEYS, readConfig } from "./config.ts";
-import { createDatabase, type Database } from "./db/database.ts";
+import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { databaseStatus, SCHEMA_MARK } from "./db/status.ts";
+import { checkDatabase, ImportError, importLocal } from "./db/transfer.ts";
 import { runRunner } from "./runner.ts";
 import type { ProviderFactory } from "./runtime/sessions.ts";
 import { serveNode } from "./server.ts";
@@ -39,6 +40,8 @@ const USAGE = [
   "  run                  Serve the page and API on BOTT_HOST:BOTT_PORT",
   "  runner [--once]      Run scheduled jobs and wake-ups under a database lease",
   "  doctor               Check the settings and the database without changing them",
+  "  db check             Show the database backend, that it answers, and its schema",
+  "  db import [--from PATH]  Copy a local SQLite instance into D1",
 ].join("\n");
 
 /** A failure the person can act on; its message is all they see. */
@@ -227,9 +230,49 @@ async function doctor(io: Io, config: Config, args: string[]): Promise<number> {
   return problems.length === 0 ? 0 : 1;
 }
 
+async function db(io: Io, config: Config, args: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { from: { type: "string" } },
+  });
+  const [action, ...extra] = positionals;
+  if (extra.length > 0 || (action !== "check" && action !== "import")) {
+    io.out(USAGE);
+    return 2;
+  }
+  if (action === "check") {
+    if (values.from !== undefined) throw new CommandError("db check takes no --from");
+    const target = existingDatabase(config, io.env);
+    if (!target) throw new CommandError(`SQLite: no database at ${config.databasePath}`);
+    try {
+      await checkDatabase(target, io.out);
+    } finally {
+      await target.close();
+    }
+    return 0;
+  }
+  if (!hasD1(io.env)) {
+    throw new CommandError(`db import copies into D1; set ${D1_VARIABLES.join(", ")} first`);
+  }
+  const target = createDatabase(config, io.env);
+  try {
+    await importLocal({
+      source: values.from === undefined ? config.databasePath : resolve(io.cwd, values.from),
+      instance: config.instance,
+      stateDir: config.stateDir,
+      target,
+      out: io.out,
+    });
+  } finally {
+    await target.close();
+  }
+  return 0;
+}
+
 type Command = (io: Io, config: Config, args: string[]) => Promise<number>;
 
-const COMMANDS: Record<string, Command> = { init, run, runner, doctor };
+const COMMANDS: Record<string, Command> = { init, run, runner, doctor, db };
 
 /** Runs one command and returns the exit code: 0 done, 1 failed, 2 not understood. */
 export async function main(argv: string[], io: Io): Promise<number> {
@@ -245,7 +288,11 @@ export async function main(argv: string[], io: Io): Promise<number> {
   try {
     return await command(io, readConfig(io.env), rest);
   } catch (error) {
-    if (error instanceof ConfigError || error instanceof CommandError) {
+    if (
+      error instanceof ConfigError ||
+      error instanceof CommandError ||
+      error instanceof ImportError
+    ) {
       io.out(error.message);
       return 1;
     }

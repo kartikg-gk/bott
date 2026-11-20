@@ -37,12 +37,14 @@ describe("the command line", () => {
   it("names only its own commands and refuses others", async () => {
     const help = io({});
     expect(await main([], help.io)).toBe(2);
-    for (const command of ["init", "run", "runner", "doctor"]) {
+    for (const command of ["init", "run", "runner", "doctor", "db check", "db import"]) {
       expect(help.text()).toContain(command);
     }
     const other = io({});
     expect(await main(["start"], other.io)).toBe(2);
     expect(other.text()).toMatch(/Unknown command: start/);
+    expect(await main(["db", "migrate"], io({}).io)).toBe(2);
+    expect(await main(["db"], io({}).io)).toBe(2);
   });
 
   it("reports a bad setting by name and stops", async () => {
@@ -147,5 +149,23 @@ describe("the command line", () => {
     expect(done?.lastAnswer).toContain("hello from the job");
     expect(await main(["runner", "--once"], io(env, { providers }).io)).toBe(0);
     await db.close();
+  });
+
+  it("checks the database without making one", async () => {
+    const state = folder();
+    const missing = io({ BOTT_STATE_DIR: state });
+    expect(await main(["db", "check"], missing.io)).toBe(1);
+    expect(missing.text()).toMatch(/SQLite: no database at/);
+    expect(existsSync(join(state, "gateway.sqlite3"))).toBe(false);
+    expect(await main(["init"], io({ BOTT_STATE_DIR: state }).io)).toBe(0);
+    const found = io({ BOTT_STATE_DIR: state });
+    expect(await main(["db", "check"], found.io)).toBe(0);
+    expect(found.text()).toBe("SQLite: answers, schema gateway-21 (this build expects gateway-21)");
+  });
+
+  it("imports only into D1", async () => {
+    const run = io({ BOTT_STATE_DIR: folder() });
+    expect(await main(["db", "import", "--from", "old.sqlite3"], run.io)).toBe(1);
+    expect(run.text()).toMatch(/CLOUDFLARE_D1_DATABASE_ID/);
   });
 });
