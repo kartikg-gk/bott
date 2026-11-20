@@ -160,7 +160,9 @@ describe("the command line", () => {
     expect(await main(["init"], io({ BOTT_STATE_DIR: state }).io)).toBe(0);
     const found = io({ BOTT_STATE_DIR: state });
     expect(await main(["db", "check"], found.io)).toBe(0);
-    expect(found.text()).toBe("SQLite: answers, schema gateway-21 (this build expects gateway-21)");
+    expect(found.text()).toBe(
+      "SQLite answers; it holds schema gateway-21, and this build expects gateway-21",
+    );
   });
 
   it("imports only into D1", async () => {

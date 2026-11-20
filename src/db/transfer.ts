@@ -1,12 +1,13 @@
 /**
  * `db check` and `db import`.
  *
- * Import moves one instance from a SQLite file on this machine into another database, normally
- * the hosted D1 one. The file is opened read-only. Every row is written with INSERT OR IGNORE, so
- * ids and owners arrive unchanged and running the import again adds only what is missing. Bot
- * notes and skill folders, which live as files here, become `bot_memory` and `skill_files` rows,
- * where a hosted gateway reads them. Leases belong to live processes and stay behind. Session
- * files are not copied: hosted runs start from what the browser sends, not from saved sessions.
+ * Import takes one instance out of a SQLite file on this machine and adds it to another
+ * database, normally the hosted D1 one. The file is never written. Rows keep their own ids and
+ * owners; a row whose key the target already has is skipped, which makes a repeated import
+ * harmless. Notes and skills, kept as files on this machine, are turned into the rows a hosted
+ * gateway reads instead (`bot_memory`, `skill_files`). Locks held by running processes mean
+ * nothing elsewhere, so they are not taken. Saved sessions are not taken either: a hosted run is
+ * seeded from the conversation the browser sends with it.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -32,8 +33,8 @@ export type Out = (line: string) => void;
 /** Prints the backend, that it answers and the schema it holds. Writes nothing. */
 export async function checkDatabase(db: Database, out: Out): Promise<void> {
   const status = await databaseStatus(db);
-  const schema = status.schema ? `schema ${status.schema}` : "no schema yet";
-  out(`${status.backend}: answers, ${schema} (this build expects ${SCHEMA_MARK})`);
+  const schema = status.schema ? `schema ${status.schema}` : "no schema";
+  out(`${status.backend} answers; it holds ${schema}, and this build expects ${SCHEMA_MARK}`);
 }
 
 /** A problem with the import that the person running it can fix. */
@@ -49,21 +50,21 @@ interface LocalRows {
 
 /** Reads the instance's rows by table, in the order the schema made the tables. */
 function readLocal(source: string, instance: string): LocalRows {
-  if (!existsSync(source)) throw new ImportError(`No local database at ${source}`);
+  if (!existsSync(source)) throw new ImportError(`There is no SQLite file at ${source}`);
   const db = new BetterSqlite3(source, { readonly: true, fileMustExist: true });
   try {
     // Exact integers: some ids are larger than a double holds.
     db.defaultSafeIntegers(true);
     const version = Number(db.pragma("user_version", { simple: true }));
     if (version !== SCHEMA_VERSION) {
-      const age = version < SCHEMA_VERSION ? "an older" : "a newer";
+      const age = version < SCHEMA_VERSION ? "older" : "newer";
       throw new ImportError(
-        `The local database has ${age} schema (${version}, this build needs ${SCHEMA_VERSION}); ` +
-          "open it once with a gateway of this build first",
+        `${source} uses schema ${version}, ${age} than the ${SCHEMA_VERSION} this build ` +
+          "reads; start this build on it once, then import",
       );
     }
     if (!db.prepare("SELECT 1 FROM instances WHERE id=?").get(instance)) {
-      throw new ImportError(`The local database does not hold instance ${instance}`);
+      throw new ImportError(`Instance ${instance} is not in ${source}`);
     }
     const names = (
       db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid").all() as {
@@ -172,8 +173,8 @@ export async function importLocal(opts: ImportOptions): Promise<Map<string, Coun
   const hosted = await target.query("SELECT id FROM bots WHERE instance=?", [instance]);
   if (hosted.some((row) => !localBots.includes(String(row.id)))) {
     throw new ImportError(
-      "The target already has bots for this instance that the local database lacks; " +
-        "import into an empty database",
+      "This instance already has bots in the target that the SQLite file does not; " +
+        "pick a target database without them",
     );
   }
   const [notes, skills] = folderRows(opts.stateDir, instance, localBots.sort());
@@ -218,10 +219,10 @@ export async function importLocal(opts: ImportOptions): Promise<Map<string, Coun
   for (const [table, count] of counts) {
     out(
       table === "memory_index_epochs"
-        ? "memory_index_epochs: new index generation; the memory index rebuilds from the facts"
-        : `${table}: ${count.copied} copied, ${count.there} already there`,
+        ? "memory_index_epochs: started a fresh index, rebuilt from the facts on first use"
+        : `${table}: added ${count.copied}, skipped ${count.there} present before`,
     );
   }
-  if (counts.size === 0) out("Nothing to copy.");
+  if (counts.size === 0) out("The instance has no rows to add.");
   return counts;
 }

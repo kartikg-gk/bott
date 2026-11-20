@@ -32,29 +32,29 @@ describe.each(backends)("into a %s target", (kind) => {
     const db = new SqliteDatabase(source);
     const store = await Store.open(db, INSTANCE);
     const chief = (await store.chief()).id;
-    const route = await store.conversation(WEB_CHAT, 11);
+    const route = await store.conversation(WEB_CHAT, 7);
     const job = await store.addJob({
       chat: route.chat,
       user: route.user,
-      actor: 11,
+      actor: 7,
       thread: route.thread,
       bot: chief,
-      task: "check mail",
+      task: "summarise the inbox",
       spec: "every:3600",
-      first: 4e9,
+      first: 5e9,
     });
     const facts = new FactStore(store.ctx);
-    await facts.remember({ project: "p", owner: 11 }, "Prefers short answers");
+    await facts.remember({ project: "p", owner: 7 }, "Prefers short answers");
     const epoch = await facts.ensureEpoch();
     await db.run("INSERT INTO leases VALUES('runner-x','someone',9e9)");
     await db.close();
     const notes = join(stateDir, "bots", chief, "memory");
     mkdirSync(notes, { recursive: true });
-    writeFileSync(join(notes, "PREFERENCES.md"), "Short answers.", "utf8");
+    writeFileSync(join(notes, "PREFERENCES.md"), "Keep replies brief.", "utf8");
     writeFileSync(join(notes, "other.txt"), "not a note", "utf8");
-    const skill = join(stateDir, "skills", "triage", "SKILL.md");
-    mkdirSync(join(stateDir, "skills", "triage"), { recursive: true });
-    writeFileSync(skill, "---\nname: triage\n---\nSort incoming issues.", "utf8");
+    const skill = join(stateDir, "skills", "sorting", "SKILL.md");
+    mkdirSync(join(stateDir, "skills", "sorting"), { recursive: true });
+    writeFileSync(skill, "---\nname: sorting\n---\nGroup issues by area.", "utf8");
     return { stateDir, source, chief, job, epoch };
   }
 
@@ -65,21 +65,23 @@ describe.each(backends)("into a %s target", (kind) => {
     const db = target();
     await importLocal({ source, instance: INSTANCE, stateDir, target: db, out: quiet });
     const jobs = await db.query("SELECT id,instance,bot,task FROM jobs");
-    expect(jobs).toEqual([{ id: job, instance: INSTANCE, bot: chief, task: "check mail" }]);
+    expect(jobs).toEqual([
+      { id: job, instance: INSTANCE, bot: chief, task: "summarise the inbox" },
+    ]);
     const notes = await db.query("SELECT bot,file,content FROM bot_memory");
-    expect(notes).toEqual([{ bot: chief, file: "PREFERENCES.md", content: "Short answers." }]);
+    expect(notes).toEqual([{ bot: chief, file: "PREFERENCES.md", content: "Keep replies brief." }]);
     const skills = await db.query("SELECT scope,skill,path,content FROM skill_files");
     expect(skills).toEqual([
       {
         scope: "",
-        skill: "triage",
+        skill: "sorting",
         path: "SKILL.md",
-        content: "---\nname: triage\n---\nSort incoming issues.",
+        content: "---\nname: sorting\n---\nGroup issues by area.",
       },
     ]);
     expect(await db.query("SELECT * FROM leases")).toEqual([]);
     const facts = await db.query("SELECT owner,text FROM memory_facts");
-    expect(facts).toEqual([{ owner: 11, text: "Prefers short answers" }]);
+    expect(facts).toEqual([{ owner: 7, text: "Prefers short answers" }]);
     // The hosted store opens on the copied rows without adding a second chief.
     const store = await Store.open(db, INSTANCE);
     expect((await store.bots()).map((bot) => bot.id)).toEqual([chief]);
@@ -107,7 +109,7 @@ describe.each(backends)("into a %s target", (kind) => {
     });
     expect([...second.values()].every((count) => count.copied === 0)).toBe(true);
     expect(second.get("jobs")).toEqual({ copied: 0, there: 1 });
-    expect(lines).toContain("jobs: 0 added, 1 present");
+    expect(lines).toContain("jobs: added 0, skipped 1 present before");
   });
 
   it("gives the hosted database its own memory index generation", async () => {
@@ -144,7 +146,7 @@ describe.each(backends)("into a %s target", (kind) => {
     await Store.open(db, INSTANCE);
     await expect(
       importLocal({ source, instance: INSTANCE, stateDir, target: db, out: quiet }),
-    ).rejects.toThrow(/already has bots/);
+    ).rejects.toThrow(/already has bots in the target/);
   });
 
   it("refuses a local file on another schema, or one without the instance", async () => {
@@ -154,7 +156,7 @@ describe.each(backends)("into a %s target", (kind) => {
     raw.close();
     await expect(
       importLocal({ source, instance: INSTANCE, stateDir, target: target(), out: quiet }),
-    ).rejects.toThrow(/older schema/);
+    ).rejects.toThrow(/schema 3, older than the 21/);
     await expect(
       importLocal({
         source: join(stateDir, "missing.sqlite3"),
@@ -163,14 +165,14 @@ describe.each(backends)("into a %s target", (kind) => {
         target: target(),
         out: quiet,
       }),
-    ).rejects.toThrow(/No local database/);
+    ).rejects.toThrow(/no SQLite file/);
   });
 
   it("refuses an instance the local file does not hold", async () => {
     const { stateDir, source } = await local();
     await expect(
       importLocal({ source, instance: "f".repeat(32), stateDir, target: target(), out: quiet }),
-    ).rejects.toThrow(/does not hold instance/);
+    ).rejects.toThrow(/is not in/);
   });
 
   it("reports the backend, that it answers and its schema, changing nothing", async () => {
@@ -178,7 +180,9 @@ describe.each(backends)("into a %s target", (kind) => {
     const lines: string[] = [];
     await checkDatabase(db, (line) => lines.push(line));
     const backend = kind === "d1" ? "D1" : "SQLite";
-    expect(lines).toEqual([`${backend}: answers, no schema yet (this build expects gateway-21)`]);
+    expect(lines).toEqual([
+      `${backend} answers; it holds no schema, and this build expects gateway-21`,
+    ]);
     expect(await db.query("SELECT name FROM sqlite_master WHERE name='schema_migrations'")).toEqual(
       [],
     );
@@ -186,7 +190,7 @@ describe.each(backends)("into a %s target", (kind) => {
     lines.length = 0;
     await checkDatabase(db, (line) => lines.push(line));
     expect(lines).toEqual([
-      `${backend}: answers, schema gateway-21 (this build expects gateway-21)`,
+      `${backend} answers; it holds schema gateway-21, and this build expects gateway-21`,
     ]);
   });
 });
