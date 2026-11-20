@@ -16,7 +16,7 @@ import { ExtraError, skills, task } from "./cliExtra.ts";
 import { type Config, ConfigError, type Env, PROVIDER_KEYS, readConfig } from "./config.ts";
 import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { databaseStatus, SCHEMA_MARK } from "./db/status.ts";
-import { checkDatabase, ImportError, importLocal } from "./db/transfer.ts";
+import { checkDatabase, ImportError, importAccounts, importLocal } from "./db/transfer.ts";
 import type { ModelLimits } from "./limits/limits.ts";
 import { runRunners } from "./runner.ts";
 import type { ProviderFactory } from "./runtime/sessions.ts";
@@ -48,6 +48,7 @@ const USAGE = [
   "  skills [list|add FOLDER|remove NAME] [--bot NAME]  Look after shared or one bot's skills",
   "  db check             Show the database backend, that it answers, and its schema",
   "  db import [--from PATH]  Copy a local SQLite instance into D1",
+  "  db import --accounts     Copy every local account, its sealed keys and its bots into D1",
 ].join("\n");
 
 /** A failure the person can act on; its message is all they see. */
@@ -253,7 +254,7 @@ async function db(io: Io, config: Config, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { from: { type: "string" } },
+    options: { from: { type: "string" }, accounts: { type: "boolean" } },
   });
   const [action, ...extra] = positionals;
   if (extra.length > 0 || (action !== "check" && action !== "import")) {
@@ -261,7 +262,9 @@ async function db(io: Io, config: Config, args: string[]): Promise<number> {
     return 2;
   }
   if (action === "check") {
-    if (values.from !== undefined) throw new CommandError("db check takes no --from");
+    if (values.from !== undefined || values.accounts) {
+      throw new CommandError("db check takes no --from or --accounts");
+    }
     const target = existingDatabase(config, io.env);
     if (!target) throw new CommandError(`SQLite: no database at ${config.databasePath}`);
     try {
@@ -274,8 +277,24 @@ async function db(io: Io, config: Config, args: string[]): Promise<number> {
   if (!hasD1(io.env)) {
     throw new CommandError(`db import copies into D1; set ${D1_VARIABLES.join(", ")} first`);
   }
+  if (values.accounts && values.from !== undefined) {
+    throw new CommandError(
+      "db import --accounts reads the whole state folder (BOTT_STATE_DIR); leave out --from",
+    );
+  }
   const target = createDatabase(config, io.env);
   try {
+    if (values.accounts) {
+      await importAccounts({
+        stateDir: config.stateDir,
+        sharedFile: config.databasePath,
+        realm: config.instance,
+        key: io.env[MASTER_KEY_VARIABLE],
+        target,
+        out: io.out,
+      });
+      return 0;
+    }
     await importLocal({
       source: values.from === undefined ? config.databasePath : resolve(io.cwd, values.from),
       instance: config.instance,

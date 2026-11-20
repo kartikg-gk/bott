@@ -235,4 +235,25 @@ describe("the command line", () => {
     expect(await main(["db", "import", "--from", "old.sqlite3"], run.io)).toBe(1);
     expect(run.text()).toMatch(/CLOUDFLARE_D1_DATABASE_ID/);
   });
+
+  it("moves every account only from the state folder, and only into D1", async () => {
+    const local = io({ BOTT_STATE_DIR: folder() });
+    expect(await main(["db", "import", "--accounts"], local.io)).toBe(1);
+    expect(local.text()).toMatch(/CLOUDFLARE_D1_DATABASE_ID/);
+    const d1 = {
+      BOTT_STATE_DIR: folder(),
+      CLOUDFLARE_API_TOKEN: "t",
+      CLOUDFLARE_ACCOUNT_ID: "a",
+      CLOUDFLARE_D1_DATABASE_ID: "d",
+    };
+    const both = io(d1);
+    expect(await main(["db", "import", "--accounts", "--from", "x.sqlite3"], both.io)).toBe(1);
+    expect(both.text()).toMatch(/leave out --from/);
+    const check = io(d1);
+    expect(await main(["db", "check", "--accounts"], check.io)).toBe(1);
+    expect(check.text()).toMatch(/takes no --from or --accounts/);
+    const help = io({});
+    await main(["help"], help.io);
+    expect(help.text()).toMatch(/db import --accounts/);
+  });
 });
