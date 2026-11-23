@@ -36,6 +36,7 @@ import { type ComputerSettings, computerSettings } from "../computers/settings.t
 import { Lease } from "../db/leases.ts";
 import type { Route } from "../store/routes.ts";
 import type { Store } from "../store/store.ts";
+import { SetupError } from "./errors.ts";
 import { answerOwnCall, OWN_TOOL_NAMES, ownTools } from "./ownTools.ts";
 import { type Agents, answerTeamCall, jobTools, teamTools } from "./team.ts";
 
@@ -648,10 +649,10 @@ export class SessionManager {
     try {
       let route = await this.current(routeId);
       const bot = await this.store.bot(route.bot ?? (await this.store.chief()).id);
-      if (!bot) throw new Error("The bot was deleted");
+      if (!bot) throw new SetupError("The bot was deleted");
       const local = this.config.sessionsDir !== null;
       if (local && route.sessionFile && !existsSync(route.sessionFile)) {
-        throw new Error("The the saved session file is gone; start a fresh conversation.");
+        throw new SetupError("The the saved session file is gone; start a fresh conversation.");
       }
       // A transcript in another format stays as it is; the route continues in a new session.
       const foreign = local && route.sessionFile !== null && !ownFormat(route.sessionFile);

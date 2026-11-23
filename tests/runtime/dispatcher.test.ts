@@ -1,14 +1,15 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Policy } from "../../src/agent/policy.ts";
 import type { ProviderRequest, StreamEvent } from "../../src/agent/providers/types.ts";
 import { emptyUsage, textOf } from "../../src/agent/transcript.ts";
 import type { Bot } from "../../src/bots/bots.ts";
 import type { Database } from "../../src/db/database.ts";
 import { Lease } from "../../src/db/leases.ts";
-import { Dispatcher } from "../../src/runtime/dispatcher.ts";
+import { COULD_NOT_START, Dispatcher } from "../../src/runtime/dispatcher.ts";
+import { SetupError } from "../../src/runtime/errors.ts";
 import { type RuntimeConfig, SessionManager } from "../../src/runtime/sessions.ts";
 import { Store, WEB_CHAT } from "../../src/store/store.ts";
 import { type Backend, backends, database } from "../support/fakeD1.ts";
@@ -309,6 +310,33 @@ describe.each(backends)("%s backend", (kind: Backend) => {
       text: expect.stringContaining("the saved session file is gone"),
     });
     expect(await dispatcher.tick()).toBe(0);
+  });
+
+  it("a run that cannot start names a setup problem and keeps other errors to itself", async () => {
+    const { store, sessions, sink, dispatcher, status } = await setup(gated([]));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      sessions.prompt = async () => {
+        throw new SetupError("No model key is saved for this account yet; add one under Account settings");
+      };
+      const fixable = await store.admitWeb(WEB_CHAT, 9, "hi");
+      await dispatcher.tick();
+      await dispatcher.idle();
+      expect(await status(fixable.id)).toBe("failed");
+      expect(sink.texts().at(-1)).toBe("No model key is saved for this account yet; add one under Account settings");
+
+      sessions.prompt = async () => {
+        throw new Error("SQLITE_BUSY at C:/state/gateway.sqlite3");
+      };
+      const odd = await store.admitWeb(WEB_CHAT, 9, "again");
+      await dispatcher.tick();
+      await dispatcher.idle();
+      expect(await status(odd.id)).toBe("failed");
+      expect(sink.texts().at(-1)).toBe(COULD_NOT_START);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("an answer that cannot be delivered is marked delivery_failed", async () => {

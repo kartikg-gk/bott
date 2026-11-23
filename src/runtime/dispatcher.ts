@@ -2,6 +2,7 @@ import type { SessionEvent } from "../agent/session.ts";
 import type { InboxItem, InboxStatus } from "../store/inbox.ts";
 import type { Route } from "../store/routes.ts";
 import { type Store, WEB_CHAT } from "../store/store.ts";
+import { SetupError } from "./errors.ts";
 import { BotBusy, type EventSource, type Origin, type SessionManager } from "./sessions.ts";
 import type { ApprovalCard, Sink } from "./sink.ts";
 
@@ -50,6 +51,8 @@ const QUEUE_FULL = "The prompt queue is full right now; retry later.";
 /** The longest delay a timer takes, in milliseconds. */
 const MAX_TIMER = 2 ** 31 - 1;
 const INTERRUPTED = "Task interrupted. It was not replayed.";
+/** What the person reads when a run fails to start for a reason that is not theirs to fix. */
+export const COULD_NOT_START = "The task could not start, and nothing was run. Try again later.";
 
 /** Run approvals are not tied to a run of their own, so they all carry this run name. */
 const SESSION_RUN = "native";
@@ -355,7 +358,9 @@ export class Dispatcher {
       // Once the session has the prompt, what it did is unknown; before that, nothing ran.
       await this.store.mark(item, active.started ? "uncertain" : "failed").catch(() => {});
       await this.sessions.abort(route).catch(() => {});
-      const reason = err instanceof Error ? err.message : String(err);
+      let reason = COULD_NOT_START;
+      if (err instanceof SetupError) reason = err.message;
+      else if (!active.started) console.warn("A task could not start:", err);
       await this.deliver(route, active.started ? INTERRUPTED : reason).catch(() => {});
     } finally {
       await this.settleChores(active);
