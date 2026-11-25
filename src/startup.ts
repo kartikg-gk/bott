@@ -14,6 +14,8 @@ import { openAICompatibleProvider } from "./agent/providers/openai.ts";
 import { withRetry } from "./agent/providers/retry.ts";
 import type { FetchFn, ModelProvider, StreamEvent } from "./agent/providers/types.ts";
 import { AppConnections } from "./apps/connections.ts";
+import { BrowserKeys } from "./browser/keys.ts";
+import { BrowserRegistry } from "./browser/registry.ts";
 import { type Config, ConfigError, type Env, PROVIDER_KEYS } from "./config.ts";
 import { createDatabase, D1_VARIABLES, type Database } from "./db/database.ts";
 import { ensureSchema } from "./db/schema.ts";
@@ -178,6 +180,8 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
     const apps = connectedApps(connections);
+    const browser = new BrowserKeys(store, opts.fetch ? { fetch: opts.fetch as typeof fetch } : {});
+    const browsers = new BrowserRegistry();
     const built = new AccountGateways({
       store,
       login,
@@ -195,6 +199,7 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       ...(opts.providers ? { fixed: opts.providers } : {}),
       apps,
       memory: memory(config, env),
+      browsers: { registry: browsers, keys: browser },
     });
     gateways = built;
     const models = new AccountModels(store, {
@@ -202,7 +207,13 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     });
     const handler = createApp({
-      auth: { mode: "google", login, models, gateway: (account) => built.gateway(account) },
+      auth: {
+        mode: "google",
+        login,
+        models,
+        browser,
+        gateway: (account) => built.gateway(account),
+      },
       proxySecret: config.proxySecret,
       apps,
       health: () => databaseStatus(db),
@@ -215,6 +226,7 @@ async function googleServer(config: Config, db: Database, opts: StartOptions): P
       gateways: () => built.runtimes.current(),
       close: async (graceMs) => {
         await built.close(graceMs);
+        await browsers.closeAll();
         await opened.close();
         await db.close();
       },

@@ -1,6 +1,9 @@
 import { AccountRuntimes } from "../accounts/runtimes.ts";
 import type { Account, AccountStore } from "../accounts/store.ts";
 import type { Policy } from "../agent/policy.ts";
+import type { BrowserKeys } from "../browser/keys.ts";
+import type { BrowserRegistry } from "../browser/registry.ts";
+import { BotBrowser } from "../browser/tools.ts";
 import type { ComputerFactory } from "../computers/index.ts";
 import type { ComputerSettings } from "../computers/settings.ts";
 import type { Database } from "../db/database.ts";
@@ -36,6 +39,8 @@ export interface AccountGatewaysOptions {
   apps?: AppsSeam;
   /** Long-term memory for each account's gateway; off when left out. */
   memory?: GatewayOptions["memory"];
+  /** Web browsers for each account's bots, on the account's own Browser Run key. */
+  browsers?: { registry: BrowserRegistry; keys: BrowserKeys };
 }
 
 /**
@@ -86,6 +91,11 @@ export class AccountGateways {
           ...(opts.memory ? { memory: opts.memory } : {}),
         });
         await (opts.apps ?? NO_APPS).attach(gateway, runtime.account);
+        if (opts.browsers) {
+          const { registry, keys } = opts.browsers;
+          const id = runtime.account.id;
+          gateway.sessions.browser = new BotBrowser(registry, id, () => keys.load(id));
+        }
         return gateway;
       },
     });

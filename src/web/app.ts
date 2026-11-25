@@ -18,6 +18,7 @@
  * - GET  /api/account/model       -> { provider, model, keys: string[] }
  * - PUT  /api/account/model       { provider, model, key? } -> same shape as GET
  * - DELETE /api/account/keys/:provider -> same shape as GET
+ * - /api/account/browser and /api/runs/:run/browser, see api/browser.ts
  *
  * Either mode, with no sign-in:
  * - GET  /health                  -> { status: "ok", database: "answers", schema: string | null }
@@ -32,7 +33,9 @@ import { HttpError } from "../accounts/http.ts";
 import { bearerAllowed } from "../accounts/localToken.ts";
 import type { AccountModels } from "../accounts/models.ts";
 import type { Account } from "../accounts/store.ts";
+import type { BrowserKeys } from "../browser/keys.ts";
 import { botRoutes } from "./api/bots.ts";
+import { browserKeyRoutes, browserViewRoutes } from "./api/browser.ts";
 import { chatRoutes } from "./api/chat.ts";
 import { jobRoutes } from "./api/jobs.ts";
 import { memoryRoutes } from "./api/memory.ts";
@@ -79,6 +82,8 @@ export interface GoogleAuth {
   mode: "google";
   login: GoogleLogin;
   models: AccountModels;
+  /** The account's Browser Run key; bots get no browser when left out. */
+  browser?: BrowserKeys;
   gateway: (account: Account) => Promise<Gateway>;
 }
 
@@ -105,6 +110,7 @@ export function apiRouter(): ApiRouter {
   jobRoutes(router);
   resourceRoutes(router);
   memoryRoutes(router);
+  browserViewRoutes(router);
   return router;
 }
 
@@ -143,6 +149,7 @@ export function createApp(opts: AppOptions): (request: Request) => Promise<Respo
   if (weak) throw new Error(weak);
   const router = apiRouter();
   if (auth.mode === "google") accountRoutes(router, auth.models);
+  if (auth.mode === "google" && auth.browser) browserKeyRoutes(router, auth.browser);
   (opts.apps ?? NO_APPS).routes(router);
 
   const page = () =>
