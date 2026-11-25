@@ -363,6 +363,7 @@ export class Dispatcher {
       }
       const answer = await this.sessions.prompt(route, above + item.text, {
         onEvent: (e, source) => this.observe(active, e, source),
+        run: item.run,
       });
       await this.settleChores(active);
       // A run stopped from the page has moved on; its answer is not delivered.

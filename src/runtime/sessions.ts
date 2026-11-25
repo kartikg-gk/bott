@@ -18,7 +18,7 @@ import { loadSkills, type Skill } from "../agent/skills.ts";
 import { fileTools } from "../agent/tools/files.ts";
 import { shellTool } from "../agent/tools/shell.ts";
 import type { Workspace } from "../agent/tools/workspace.ts";
-import type { ToolSpec } from "../agent/tools.ts";
+import { errorOutput, type ToolSpec } from "../agent/tools.ts";
 import { type TranscriptEntry, textOf } from "../agent/transcript.ts";
 import { type BotApps, LOAD_PLUGIN } from "../apps/access.ts";
 import { type Bot, botRoot, MEMORY_FILES, systemAddition, workspaceDir } from "../bots/bots.ts";
@@ -32,6 +32,7 @@ import {
   savedSession,
 } from "../bots/profiles.ts";
 import { ensureStarters } from "../bots/starters.ts";
+import { type BotBrowser, browserTools } from "../browser/tools.ts";
 import { type ComputerFactory, makeComputer } from "../computers/index.ts";
 import { type ComputerSettings, computerSettings } from "../computers/settings.ts";
 import { Lease } from "../db/leases.ts";
@@ -71,6 +72,8 @@ export type EventObserver = (event: SessionEvent, source: EventSource) => void;
 
 export interface PromptOptions {
   onEvent?: EventObserver | undefined;
+  /** The web run this prompt answers; the bot's browser for it closes when the prompt ends. */
+  run?: string | null | undefined;
 }
 
 /** Who started a piece of work: the conversation it belongs to and the person who asked. */
@@ -145,6 +148,8 @@ interface Built {
   profile: Profile;
   /** The apps the bot may load: granted to it and ready to use. */
   apps: string[];
+  /** Which browser tools the bot gets: none without a key, only reads in a read-only run. */
+  browser: "none" | "read" | "all";
   /** Changes whenever anything the session was built from changes. */
   signature: string;
 }
@@ -198,6 +203,10 @@ export class SessionManager {
   apps: BotApps | undefined;
   /** Where a hosted server keeps bot notes and skills; filled into the folders before a build. */
   folders: FolderMirror | undefined;
+  /** The account's web browsers for bots; without it bots get no browser tools. */
+  browser: BotBrowser | undefined;
+  /** The run each working bot's browser belongs to, by bot. */
+  private readonly browserRuns = new Map<string, string>();
 
   constructor(
     private readonly config: RuntimeConfig,
@@ -312,11 +321,13 @@ export class SessionManager {
     const releaseBot = await this.holdRouteBot(route.id);
     let release: (() => void) | undefined;
     let live: Live | undefined;
+    let browsing: { bot: string; run: string } | undefined;
     try {
       release = await this.lockRoute(route.id);
       const found = await this.liveFor(route.id);
       live = found.live;
       live.busy = true;
+      browsing = this.startBrowsing(found.bot.id, opts.run);
       await recordChat(this.store, found.bot.id, "user", text);
       const answer = await this.run(live, text, opts.onEvent);
       await this.persist(found.route, found.bot, live);
@@ -327,6 +338,7 @@ export class SessionManager {
         live.busy = false;
         live.touched = this.now();
       }
+      await this.endBrowsing(browsing);
       release?.();
       await releaseBot();
     }
@@ -470,6 +482,7 @@ export class SessionManager {
     let sessionFile: string | null = null;
     let release: (() => void) | undefined;
     let live: Live | undefined;
+    let browsing: { bot: string; run: string } | undefined;
     const stop = () => void live?.session.request("abort").catch(() => {});
     opts.signal?.addEventListener("abort", stop, { once: true });
     try {
@@ -486,7 +499,9 @@ export class SessionManager {
       this.drop(sessionKey(id));
       const built = await this.build(target);
       const tools = opts.readOnly ? built.tools.filter((t) => t.readOnly) : built.tools;
-      live = await this.create(target, { ...built, tools }, id, sessionFile, {
+      const browser = opts.readOnly && built.browser === "all" ? "read" : built.browser;
+      browsing = this.startBrowsing(target.id, null);
+      live = await this.create(target, { ...built, tools, browser }, id, sessionFile, {
         model: this.config.model,
         policy: opts.policy,
         route,
@@ -505,6 +520,7 @@ export class SessionManager {
       return answer;
     } finally {
       opts.signal?.removeEventListener("abort", stop);
+      await this.endBrowsing(browsing);
       if (live) {
         live.busy = false;
         live.listener = undefined;
@@ -554,11 +570,28 @@ export class SessionManager {
     }
   }
 
+  /** Notes which run the bot's browser belongs to while it works. */
+  private startBrowsing(bot: string, run: string | null | undefined): { bot: string; run: string } {
+    const owned = { bot, run: run ?? `local-${randomUUID()}` };
+    this.browserRuns.set(bot, owned.run);
+    return owned;
+  }
+
+  /** Closes the browser the bot used in the run that just ended. */
+  private async endBrowsing(owned: { bot: string; run: string } | undefined): Promise<void> {
+    if (!owned) return;
+    if (this.browserRuns.get(owned.bot) === owned.run) this.browserRuns.delete(owned.bot);
+    await this.browser?.end(owned.run).catch(() => {});
+  }
+
   async close(): Promise<void> {
     clearInterval(this.timer);
     const running = [...this.live.values(), ...this.delegations].filter((l) => l.busy);
     this.live.clear();
     await Promise.allSettled(running.map((l) => l.session.request("abort")));
+    const runs = [...new Set(this.browserRuns.values())];
+    this.browserRuns.clear();
+    await Promise.allSettled(runs.map((run) => this.browser?.end(run)));
     // Stopping keeps each computer's files; it starts again on next use.
     await Promise.allSettled([...this.workspaces.values()].map((ws) => ws.stop()));
   }
@@ -726,12 +759,22 @@ export class SessionManager {
     if (plugins.length > 0) sections.push(`# Apps\nYou may use these apps: ${plugins.join(", ")}.`);
     const system = buildSystem({ base: BASE, instructions: sections.join("\n\n"), skills });
     const tools = [...fileTools(ws), shellTool(ws)];
+    const browser = (await this.browser?.available()) ? "all" : "none";
     const signature = JSON.stringify([
       system,
       skills.map((s) => [s.name, s.body]),
       tools.map((t) => t.name),
+      browser,
     ]);
-    return { system, tools, skills, profile: settings, apps: this.apps ? plugins : [], signature };
+    return {
+      system,
+      tools,
+      skills,
+      profile: settings,
+      apps: this.apps ? plugins : [],
+      browser,
+      signature,
+    };
   }
 
   private async create(
@@ -753,6 +796,7 @@ export class SessionManager {
         ...(bot.chief ? [...teamTools(), ...jobTools()] : jobTools()),
         ...ownTools(),
         ...(apps ? [apps.loader(built.apps)] : []),
+        ...(this.browser && built.browser !== "none" ? browserTools(built.browser === "all") : []),
       ],
       answerHostTool: async (call: HostToolCall, signal: AbortSignal) => {
         if (apps && call.name === LOAD_PLUGIN) {
@@ -761,6 +805,11 @@ export class SessionManager {
           return loaded.output;
         }
         if (apps?.owns(call.name)) return apps.call(bot, call.name, call.input, signal);
+        if (this.browser?.owns(call.name)) {
+          const run = this.browserRuns.get(bot.id);
+          if (built.browser === "none" || run === undefined) return errorOutput("Unknown tool");
+          return this.browser.call(bot.id, run, call, signal);
+        }
         if (OWN_TOOL_NAMES.has(call.name)) {
           return answerOwnCall(
             {
